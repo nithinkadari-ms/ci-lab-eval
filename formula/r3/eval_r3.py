@@ -9,6 +9,13 @@ from taxonomy import difficulty, tags
 from evaluate import bleu4
 from rapidfuzz.distance import Levenshtein
 
+
+def join_lines(parts):
+    r"""Recognised line pieces -> one aligned block: \begin{aligned} p1 \ p2 \end{aligned}."""
+    bs = chr(92)
+    return bs + "begin{aligned} " + (" " + bs + bs + " ").join(parts) + " " + bs + "end{aligned}"
+
+
 R = os.path.join(ROOT, "results")
 OUT = []
 SUMMARY = {}
@@ -132,21 +139,7 @@ def test1():
     cv_exact = 100 * sum(cv_em) / len(cv_em)
     P["hybrid_logic"] = hybrid_preds(lambda i: conf[i] >= tau and bool(P["logic"].get(i)))
     S["hybrid_logic"] = Scored(items, P["hybrid_logic"])
-    # hybrids with baseline tools (their own confidence where they report one, else status ok)
-    for t in ("pdfmath", "rustypaper", "kakemono", "gopdfkit"):
-        if t not in P:
-            continue
-        tc = {i: tools[t].get(i, {}).get("confidence") for i in ids}
-        has_conf = any(v is not None for v in tc.values())
-        if has_conf:
-            bt = max(taus, key=lambda th: sum((S[t].em[i] if (tc[i] or 0) >= th and P[t].get(i) else base.em[i]) for i in ids))
-            gate = lambda i, th=bt, t=t, tc=tc: (tc[i] or 0) >= th and bool(P[t].get(i))
-        else:
-            bt = None
-            gate = lambda i, t=t: bool(P[t].get(i)) and tools[t].get(i, {}).get("status") == "ok"
-        P[f"hybrid_{t}"] = {i: (P[t].get(i) if gate(i) else P["p2t15_int8"].get(i)) for i in ids}
-        S[f"hybrid_{t}"] = Scored(items, P[f"hybrid_{t}"])
-        SUMMARY[f"hybrid_{t}_tau"] = bt
+    # the baseline tools expose no calibrated confidence, so only the own rebuild gets a hybrid gate
     systems = list(S)
     OUT.append(f"\n## Test 1 - formulas rebuilt from the PDF text layer ({len(ids)} arXiv crops)\n")
     OUT.append(f"Gate threshold for hybrid_logic chosen on all crops: tau={tau}; 2-fold cross-validated by paper: hybrid exact {cv_exact:.1f}%.")
@@ -216,6 +209,14 @@ def test1():
         OUT.append(f"- logic accepted but wrong `{i}` conf={conf[i]} family={byid[i]['_family']}<br>GT: `{cut(byid[i]['gt'])}`<br>logic: `{cut(P['logic'].get(i))}`<br>INT8: `{cut(P['p2t15_int8'].get(i))}`")
     rej_right = [i for i in ids if conf[i] < tau and S["logic"].em[i]]
     OUT.append(f"\nlogic exact but rejected by the gate: {len(rej_right)}; logic wrong and rejected: {sum(1 for i in ids if conf[i] < tau and not S['logic'].em[i])}")
+    pp = [i for i in ids if logic.get(i, {}).get("punct_from_page")]
+    if pp:
+        OUT.append(f"\nTrailing punctuation taken from the page just right of a display crop (the models see only the crop): "
+                   f"{len(pp)} crops; on these logic exact {100 * sum(S['logic'].em[i] for i in pp) / len(pp):.1f}%, "
+                   f"INT8 exact {100 * sum(base.em[i] for i in pp) / len(pp):.1f}%. "
+                   f"All crops without these: logic {100 * sum(S['logic'].em[i] for i in ids if i not in set(pp)) / max(1, len(ids) - len(pp)):.1f}%, "
+                   f"INT8 {100 * sum(base.em[i] for i in ids if i not in set(pp)) / max(1, len(ids) - len(pp)):.1f}%.")
+        SUMMARY["t1_punct_from_page"] = len(pp)
     for t in [k for k in ("pdfmath", "rustypaper", "kakemono", "gopdfkit") if k in S]:
         wr = [i for i in ids if P[t].get(i) and not S[t].em[i]]
         for i in rnd.sample(wr, min(2, len(wr))):
@@ -262,7 +263,7 @@ def test2():
         if not sp:
             continue
         ids2 = [i for i in ids if i in sp]
-        P_split = {i: (sp[i]["pred"] if sp[i].get("pred") else dec[i]["pred1024"]) for i in ids2}
+        P_split = {i: (join_lines(sp[i]["pieces"]) if sp[i].get("pieces") else dec[i]["pred1024"]) for i in ids2}
         SS = Scored([byid[i] for i in ids2], P_split)
         rows = []
         multi = lambda i: "\\\\" in byid[i]["gt"] or "aligned" in byid[i]["gt"] or "gathered" in byid[i]["gt"]

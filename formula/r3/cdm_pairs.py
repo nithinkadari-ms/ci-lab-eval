@@ -1,5 +1,12 @@
 """Build CDM input pairs {id, gt, pred} for one system on the fixed 3,000-case subset."""
 import glob, json, os, sys
+
+
+def join_lines(parts):
+    r"""Recognised line pieces -> one aligned block: \begin{aligned} p1 \ p2 \end{aligned}."""
+    bs = chr(92)
+    return bs + "begin{aligned} " + (" " + bs + bs + " ").join(parts) + " " + bs + "end{aligned}"
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 system, shard, nsh, out = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), sys.argv[4]
 sub = json.load(open(os.path.join(ROOT, "manifests", "cdm_subset.json")))
@@ -30,7 +37,7 @@ elif system.startswith("t2_"):
         pred = {i: r["pred1024"] for i, r in dec.items()}
     else:
         sp = rows(f"t2/split_{model}.s*.jsonl")
-        pred = {i: (sp[i].get("pred") if i in sp and sp[i].get("pred") else r["pred1024"]) for i, r in dec.items()}
+        pred = {i: (join_lines(sp[i]["pieces"]) if i in sp and sp[i].get("pieces") else r["pred1024"]) for i, r in dec.items()}
 else:
     pred = {i: r.get("pred", "") for i, r in rows(f"acc/{system}.cdm_items.s*.jsonl").items()}
 ids = [i for i in sub if i in pred]

@@ -4,6 +4,13 @@ thin ink band such as a fraction bar). Each line is recognised separately and jo
 import json, os, sys, time
 import numpy as np
 from PIL import Image
+
+
+def join_lines(parts):
+    r"""Recognised line pieces -> one aligned block: \begin{aligned} p1 \ p2 \end{aligned}."""
+    bs = chr(92)
+    return bs + "begin{aligned} " + (" " + bs + bs + " ").join(parts) + " " + bs + "end{aligned}"
+
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(ROOT, "scripts"))
 sys.path.insert(0, os.path.join(ROOT, "r3", "logic"))
@@ -116,7 +123,7 @@ def main():
                 t = time.perf_counter()
                 preds = [m(p)[0] for p in ps]
                 rec["pieces"] = preds
-                rec["pred"] = "\begin{aligned} " + " \\ ".join(preds) + " \end{aligned}"
+                rec["pred"] = join_lines(preds)
                 rec["s"] = round(time.perf_counter() - t, 3)
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
             f.flush()

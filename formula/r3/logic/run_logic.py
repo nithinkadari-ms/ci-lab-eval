@@ -16,7 +16,9 @@ def work(batch):
             pd = cache.get(r["pdf"], r["page_index"])
             t1 = time.perf_counter()
             gs, ss = select(pd, r["bbox"], display="_disp" in r["id"])
+            n_inside = len(select(pd, r["bbox"])[0])
             res = rebuild(gs, ss)
+            res["punct_from_page"] = len(gs) > n_inside
             res.update({"id": r["id"], "tool": "logic", "status": "ok" if res["latex"] else "no_math", "error": None,
                         "n_glyphs": len(gs), "n_shapes": len(ss), "ms": round((time.perf_counter() - t1) * 1000, 2),
                         "ms_with_page": round((time.perf_counter() - t) * 1000, 2)})
