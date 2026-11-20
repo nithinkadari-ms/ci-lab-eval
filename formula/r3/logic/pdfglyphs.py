@@ -18,6 +18,7 @@ class Glyph:
     ox: float
     oy: float
     weight: int = 400
+    raw: bool = False
 
 
 @dataclass
@@ -54,7 +55,7 @@ def page_data(pdf, page_index):
     pd = PageData()
     for i in range(n):
         u = R.FPDFText_GetUnicode(raw, i)
-        if u in (0x20, 0x0D, 0x0A, 0xA0) or R.FPDFText_IsGenerated(raw, i) == 1:
+        if u in (0x0D, 0x0A) or R.FPDFText_IsGenerated(raw, i) == 1:
             continue
         if not R.FPDFText_GetCharBox(raw, i, ctypes.byref(l), ctypes.byref(r), ctypes.byref(b), ctypes.byref(t)):
             continue
@@ -66,6 +67,16 @@ def page_data(pdf, page_index):
                 size = max(size, abs(rect.top - rect.bottom))
         pd.glyphs.append(Glyph(u, _font_name(raw, i, buf, flags), float(size), l.value, b.value, r.value, t.value,
                                ox.value, oy.value, int(R.FPDFText_GetFontWeight(raw, i))))
+    from mathmap import font_role
+    raw_fonts = {g.font for g in pd.glyphs if font_role(g.font)[0] == "ex" and (g.u < 0x20 or (g.u < 0x80 and chr(g.u).isalnum()))}
+    keep = []
+    for g in pd.glyphs:
+        ex = font_role(g.font)[0] == "ex"
+        if g.u in (0x20, 0xA0) and not (ex and g.font in raw_fonts and g.x1 - g.x0 > 0.5):
+            continue
+        g.raw = g.font in raw_fonts
+        keep.append(g)
+    pd.glyphs = keep
     for obj in page.get_objects(max_depth=4):
         typ = obj.type
         if typ not in (R.FPDF_PAGEOBJ_PATH, R.FPDF_PAGEOBJ_IMAGE, R.FPDF_PAGEOBJ_SHADING):

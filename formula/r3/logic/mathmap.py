@@ -199,15 +199,15 @@ for _codes, _ch in [((0xF8EB, 0xF8EC, 0xF8ED, 0x239B, 0x239C, 0x239D), "("), ((0
         PIECES[_c] = _ch
 
 
-def decode_char(u, font):
+def decode_char(u, font, raw=False):
     """Return (char, unknown_flag) after encoding fallbacks for fonts without ToUnicode."""
     role, _ = font_role(font)
     b = base_font(font)
     if u in PIECES:
         return "piece:" + PIECES[u], False
-    if role == "ex" and u < 0x80 and chr(u) not in "()[]{}|/\\<>":
+    if role == "ex" and u < 0x80 and (raw or chr(u) not in "()[]{}|/\\<>"):
         return OMX.get(u, None), u not in OMX
-    if u < 0x20 or (role == "sy" and u < 0x80 and not chr(u).isalnum() and u not in (0x28, 0x29, 0x5B, 0x5D, 0x7B, 0x7D, 0x7C, 0x2F, 0x2C)):
+    if u < 0x20 or (role == "sy" and u < 0x80 and not chr(u).isalnum() and chr(u) not in "()[]{}|/,.;:<>=+-*'\\!"):
         if role == "sy":
             return OMS.get(u), u not in OMS
         if role == "mi":

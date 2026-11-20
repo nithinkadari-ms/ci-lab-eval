@@ -95,7 +95,7 @@ def main_size(items):
 def make_items(glyphs, shapes, ctx):
     items = []
     for g in glyphs:
-        ch, unknown = decode_char(g.u, g.font)
+        ch, unknown = decode_char(g.u, g.font, getattr(g, "raw", False))
         if ch is None:
             ctx.pen(0.5, f"unmapped U+{g.u:04X} {g.font}")
             items.append(Item("?", "unknown", g.x0, g.y0, g.x1, g.y1, g.oy, g.size, "", g.font))
@@ -252,7 +252,7 @@ def y_rows(items, size, region_w, strict=True):
     groups = groups[::-1]  # top to bottom
 
     def solid(g):
-        gl = [i for i in g if not i.is_rule]
+        gl = [i for i in g if not i.is_rule and i.kind != "accent" and i.h >= 0.3 * size]
         if not gl:
             return False
         ms = max(i.size for i in gl)
@@ -457,7 +457,8 @@ def parse_group(g, ctx, row_size):
         if above and below:
             rest = [i for i in g if i is not bar and i not in above and i not in below]
             num, den = parse_block(above, ctx), parse_block(below, ctx)
-            a = Atom(f"\\frac{{{num.tex}}}{{{den.tex}}}", "frac", bar.x0, y0, bar.x1, y1, bar.y0 - 0.25 * row_size, row_size)
+            fs = max((i.size for i in above + below if not i.is_rule), default=row_size)
+            a = Atom(f"\\frac{{{num.tex}}}{{{den.tex}}}", "frac", bar.x0, y0, bar.x1, y1, (bar.y0 + bar.y1) / 2 - 0.25 * fs, fs)
             return combine_rest(a, rest, ctx, row_size)
         if above and not below:
             rest = [i for i in g if i is not bar and i not in above]
@@ -479,7 +480,7 @@ def parse_group(g, ctx, row_size):
             rest = [i for i in g if i is not s_ and i is not bar and i not in inner and i not in idx]
             body = parse_block(inner, ctx).tex if inner else ""
             tex = f"\\sqrt{{{body}}}" if not idx else f"\\sqrt[{parse_block(idx, ctx).tex}]{{{body}}}"
-            a = Atom(tex, "rad", x0, y0, x1, y1, inner_base(inner, s_), row_size)
+            a = Atom(tex, "rad", x0, y0, x1, y1, inner_base(inner, s_), max((i.size for i in inner if not i.is_rule), default=row_size))
             return combine_rest(a, rest, ctx, row_size)
         inner = [i for i in g if i is not s_ and i.x0 >= s_.x0]
         ctx.pen(0.75, "radical without bar")
