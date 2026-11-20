@@ -125,8 +125,41 @@ def make_items(glyphs, shapes, ctx):
     return items
 
 
+def merge_stacked_fences(items):
+    """Tall | or \\| drawn as several stacked copies of the same glyph -> one item."""
+    fences = [i for i in items if i.kind == "fence" and not i.is_rule]
+    if len(fences) < 2:
+        return items
+    used = set()
+    out = [i for i in items if not (i.kind == "fence" and not i.is_rule)]
+    for f in sorted(fences, key=lambda i: -i.y1):
+        if id(f) in used:
+            continue
+        grp = [f]
+        used.add(id(f))
+        changed = True
+        while changed:
+            changed = False
+            for g in fences:
+                if id(g) in used or g.tok != f.tok:
+                    continue
+                gy0 = min(i.y0 for i in grp)
+                gx0, gx1 = min(i.x0 for i in grp), max(i.x1 for i in grp)
+                if min(gx1, g.x1) - max(gx0, g.x0) > 0.5 * min(gx1 - gx0, g.x1 - g.x0) and gy0 - 1.2 <= g.y1 <= gy0 + 0.6:
+                    grp.append(g)
+                    used.add(id(g))
+                    changed = True
+        if len(grp) == 1:
+            out.append(f)
+        else:
+            x0, y0, x1, y1 = bbox_of(grp)
+            out.append(Item(f.tok, "fence", x0, y0, x1, y1, min(i.base for i in grp), max(i.size for i in grp), f.ch, f.font))
+    return out
+
+
 def merge_pieces(items, ctx):
     """Grown delimiters are built from stacked pieces (top, extension, bottom): merge them into one tall delimiter."""
+    items = merge_stacked_fences(items)
     pieces = [i for i in items if i.kind == "piece"]
     if not pieces:
         return items
@@ -183,7 +216,8 @@ def x_groups(items, size):
             ov = min(a.x1, b.x1) - max(a.x0, b.x0)
             if ov <= 0:
                 continue
-            ydis = a.y1 < b.y0 or b.y1 < a.y0
+            yov = min(a.y1, b.y1) - max(a.y0, b.y0)
+            ydis = yov < 0.25 * min(max(a.h, 0.01), max(b.h, 0.01))
             if ov > tol or (ydis and ov > 0.15 * min(max(a.w, 0.01), max(b.w, 0.01))):
                 parent[find(p_)] = find(q_)
     comps = {}
@@ -223,11 +257,15 @@ def y_rows(items, size, region_w, strict=True):
     def blocked(up, lo):
         """A cut must not separate a fraction bar or big operator from material on the other side."""
         gap_top, gap_bot = min(i.y0 for i in up), max(i.y1 for i in lo)
-        for side, other in ((up, lo), (lo, up)):
+        for side, other, is_up in ((up, lo, True), (lo, up, False)):
             for r in side:
                 if (r.is_rule and r.kind == "hrule") or r.kind in ("bigop", "rad"):
-                    near = min(abs(r.y0 - gap_top), abs(r.y1 - gap_bot), abs(r.y0 - gap_bot), abs(r.y1 - gap_top))
-                    if near <= 0.9 * size and any(o.x1 > r.x0 and o.x0 < r.x1 for o in other):
+                    xo = lambda o: o.x1 > r.x0 and o.x0 < r.x1
+                    if is_up:
+                        between = [o for o in side if o is not r and xo(o) and o.y1 <= r.y0 + 0.1]
+                    else:
+                        between = [o for o in side if o is not r and xo(o) and o.y0 >= r.y1 - 0.1]
+                    if not between and any(xo(o) for o in other):
                         return True
         return False
 
@@ -278,9 +316,76 @@ def rows_base(rows):
 
 def parse_row(items, ctx):
     size = main_size(items)
+    m = split_tall_delims(items, size, ctx)
+    if m is not None:
+        return m
     groups = x_groups(items, size)
     atoms = [parse_group(g, ctx, size) for g in groups]
     return assemble(atoms, ctx)
+
+
+def split_tall_delims(items, size, ctx):
+    """Matrices, arrays and cases: content between a tall opening delimiter and its partner (or a lone tall '{')
+    that has several rows is laid out as rows (whole-width gaps) and cells (wide horizontal gaps)."""
+    tall = [i for i in items if i.kind in ("open", "close", "fence") and i.h >= 1.8 * size]
+    if not tall:
+        return None
+    for o in sorted(tall, key=lambda i: i.x0):
+        if o.kind == "close":
+            continue
+        partner = None
+        for c in sorted(tall, key=lambda i: i.x0):
+            if c is o or c.x0 <= o.x1 or c.kind == "open":
+                continue
+            if abs(c.y0 - o.y0) <= 0.35 * o.h and abs(c.y1 - o.y1) <= 0.35 * o.h:
+                partner = c
+                break
+        right = partner.x0 if partner else max(i.x1 for i in items) + 1
+        content = [i for i in items if i is not o and i is not partner and o.x1 - 0.5 <= i.cx <= right + 0.5
+                   and o.y0 - 0.2 * size <= i.cy <= o.y1 + 0.2 * size]
+        if not content:
+            continue
+        if partner is None:
+            # only a cases brace takes everything to the right
+            if o.ch != "{":
+                continue
+        rows = y_rows(content, main_size(content), max(i.x1 for i in content) - min(i.x0 for i in content), strict=False)
+        if len(rows) < 2:
+            continue
+        cell_rows = []
+        for r in rows:
+            r = sorted(r, key=lambda i: i.x0)
+            cells, cur, ext = [], [r[0]], r[0].x1
+            for it in r[1:]:
+                if it.x0 - ext > 0.8 * size:
+                    cells.append(cur)
+                    cur = [it]
+                else:
+                    cur.append(it)
+                ext = max(ext, it.x1)
+            cells.append(cur)
+            cell_rows.append(" & ".join(parse_row(c, ctx).tex for c in cells))
+        body = " \\\\ ".join(cell_rows)
+        if partner is None:
+            mid = "\\begin{cases} " + body + " \\end{cases}"
+            left = [i for i in items if i.cx < o.x0 and i not in content]
+            mtx = Atom(mid, "stack", o.x0, o.y0, right, o.y1, None, size)
+            rest = [i for i in items if i is not o and i not in content and i not in left]
+        else:
+            mid = o.tok + " \\begin{matrix} " + body + " \\end{matrix} " + partner.tok
+            left = [i for i in items if i.cx < o.x0 and i not in content]
+            mtx = Atom(mid, "stack", o.x0, min(o.y0, partner.y0), partner.x1, max(o.y1, partner.y1), None, size)
+            rest = [i for i in items if i is not o and i is not partner and i not in content and i not in left]
+        parts = []
+        if left:
+            parts.append(parse_row(left, ctx))
+        parts.append(mtx)
+        if rest:
+            parts.append(parse_row(rest, ctx))
+        tex = " ".join(p.tex for p in parts if p.tex)
+        x0, y0, x1, y1 = bbox_of(items)
+        return Atom(tex, "seq", x0, y0, x1, y1, None, size)
+    return None
 
 
 def leaf(it):
@@ -369,6 +474,16 @@ def parse_group(g, ctx, row_size):
                 cmd = "\\widetilde"
             a = Atom(f"{cmd}{{{body.tex}}}", "acc", x0, y0, x1, y1, body.base, body.size)
             return combine_rest(a, rest, ctx, row_size)
+    # word operators (lim, max, sup, inf, ...) with small limits below that touch their descenders
+    large = [i for i in glyphs if i.size >= 0.9 * row_size]
+    small = [i for i in g if i not in large]
+    if large and small and all(i.kind == "letter" for i in large) and \
+            max(i.cy for i in small) < min(i.base for i in large) and all(i.size <= 0.86 * row_size for i in small if not i.is_rule):
+        word = "".join(i.ch for i in sorted(large, key=lambda i: i.x0))
+        top = parse_row(large, ctx)
+        bot = parse_block(small, ctx)
+        if word in OPNAMES:
+            return Atom(top.tex + "_{" + bot.tex + "}", "limop", x0, y0, x1, y1, None, row_size)
     # vertical stack (matrix column, sub+sup pair, cases rows, word operators with limits, under/over-set)
     rows = y_rows(g, main_size(g), w, strict=False)
     if len(rows) == 2:
@@ -445,7 +560,9 @@ def assemble(atoms, ctx):
     mbase = statistics.median(bases) if bases else statistics.median(a.base for a in sized if a.base is not None) if any(a.base is not None for a in sized) else 0
 
     def level(a):
-        if a.kind in ("bigop", "limop", "open", "close", "fence") or a.base is None:
+        if a.kind in ("bigop", "limop") or a.base is None:
+            return 0
+        if a.kind in ("open", "close", "fence") and a.size > 0.86 * msize:
             return 0
         if a.kind == "stack":
             if a.small and a.rows and len(a.rows) == 2:
@@ -578,6 +695,7 @@ def fences(toks):
 # ---------------------------------------------------------------- repair + driver
 def repair(tex):
     tex = re.sub(r"\s+", " ", tex).strip()
+    tex = re.sub(r"\^\{\s*\^\{((?:\\prime\s*)+)\}\s*\}", r"^{\1}", tex)
     for _ in range(3):
         tex = re.sub(r"[\^_]\{\s*\}", "", tex)
     depth = 0
