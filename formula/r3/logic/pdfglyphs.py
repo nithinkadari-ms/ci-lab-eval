@@ -70,10 +70,10 @@ def page_data(pdf, page_index):
         typ = obj.type
         if typ not in (R.FPDF_PAGEOBJ_PATH, R.FPDF_PAGEOBJ_IMAGE, R.FPDF_PAGEOBJ_SHADING):
             continue
-        try:
-            x0, y0, x1, y1 = obj.get_pos()
-        except Exception:
+        bl, bb, br, bt = ctypes.c_float(), ctypes.c_float(), ctypes.c_float(), ctypes.c_float()
+        if not R.FPDFPageObj_GetBounds(obj.raw, ctypes.byref(bl), ctypes.byref(bb), ctypes.byref(br), ctypes.byref(bt)):
             continue
+        x0, y0, x1, y1 = bl.value, bb.value, br.value, bt.value
         w, h = x1 - x0, y1 - y0
         if typ == R.FPDF_PAGEOBJ_IMAGE:
             pd.shapes.append(Shape("image", x0, y0, x1, y1))

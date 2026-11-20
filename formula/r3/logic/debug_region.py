@@ -16,10 +16,15 @@ for rid in sys.argv[2].split(","):
     for obj in page.get_objects(max_depth=6):
         types[obj.type] += 1
         if obj.type != R.FPDF_PAGEOBJ_TEXT:
+            import ctypes
+            bl, bb, br, bt = ctypes.c_float(), ctypes.c_float(), ctypes.c_float(), ctypes.c_float()
+            ok = R.FPDFPageObj_GetBounds(obj.raw, ctypes.byref(bl), ctypes.byref(bb), ctypes.byref(br), ctypes.byref(bt))
+            b = (bl.value, bb.value, br.value, bt.value) if ok else "no bounds"
             try:
-                b = obj.get_pos()
+                obj.get_pos()
             except Exception as e:
-                b = str(e)
+                if len(near) < 2:
+                    print("get_pos error:", type(e).__name__, e)
             if isinstance(b, tuple) and b[2] >= x0 - 5 and b[0] <= x1 + 5 and b[3] >= y0 - 5 and b[1] <= y1 + 5:
                 near.append((obj.type, getattr(obj, "level", None), [round(v, 2) for v in b]))
     pd = page_data(pdf, r["page_index"])
