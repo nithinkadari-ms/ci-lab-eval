@@ -98,13 +98,18 @@ def page_data(pdf, page_index):
             continue
         x0, y0, x1, y1 = bl.value, bb.value, br.value, bt.value
         w, h = x1 - x0, y1 - y0
+        nested = (getattr(obj, "level", 0) or 0) >= 1
+        thin_h = h <= 1.6 and w >= max(1.0, 3.0 * h)
+        thin_v = w <= 1.6 and h >= max(1.0, 3.0 * w)
+        if nested and not (typ == R.FPDF_PAGEOBJ_PATH and (thin_h or thin_v)):
+            continue  # drawings inside form XObjects (figures) are not formula strokes
         if typ == R.FPDF_PAGEOBJ_IMAGE:
-            pd.shapes.append(Shape("hrule" if (h <= 1.6 and w >= 2.0) else "image", x0, y0, x1, y1))
+            pd.shapes.append(Shape("hrule" if thin_h and w >= 2.0 else "image", x0, y0, x1, y1))
         elif typ == R.FPDF_PAGEOBJ_SHADING:
             pd.shapes.append(Shape("path", x0, y0, x1, y1))
-        elif h <= 1.6 and w >= 1.0:
+        elif thin_h:
             pd.shapes.append(Shape("hrule", x0, y0, x1, y1))
-        elif w <= 1.6 and h >= 1.0:
+        elif thin_v:
             pd.shapes.append(Shape("vrule", x0, y0, x1, y1))
         else:
             pd.shapes.append(Shape("path", x0, y0, x1, y1))
