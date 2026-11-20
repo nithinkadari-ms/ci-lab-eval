@@ -723,7 +723,7 @@ def assemble(atoms, ctx):
     def level(a):
         if a.kind in ("bigop", "limop") or a.base is None:
             return 0
-        if a.kind in ("open", "close", "fence") and (a.size > 0.86 * msize or a.y1 - a.y0 >= 0.9 * msize):
+        if a.kind in ("open", "close", "fence") and (a.size > 0.86 * msize or (a.y1 - a.y0 >= 0.9 * msize and abs((a.y0 + a.y1) / 2 - (mbase + 0.25 * msize)) < 0.3 * msize)):
             return 0
         if a.kind == "stack":
             if a.small and a.rows and len(a.rows) == 2:

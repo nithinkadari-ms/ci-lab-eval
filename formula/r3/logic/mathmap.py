@@ -40,7 +40,7 @@ def font_role(name):
         return "frak", bold
     if "rsfs" in b or "script" in b and "math" not in b:
         return "scr", bold
-    if "eusm" in b or "eusb" in b:
+    if "eusm" in b or "eusb" in b or "calligraphic" in b:
         return "cal", bold
     if any(k in b for k in ("cmex", "lmex", "mathextension", "txex", "pxex", "esint", "stixsize", "stixintegrals",
                             "stixvariants", "ntxex")):
