@@ -60,6 +60,10 @@ def page_data(pdf, page_index):
             continue
         R.FPDFText_GetCharOrigin(raw, i, ctypes.byref(ox), ctypes.byref(oy))
         size = R.FPDFText_GetFontSize(raw, i)
+        if size < 2.0:
+            rect = R.FS_RECTF()
+            if R.FPDFText_GetLooseCharBox(raw, i, ctypes.byref(rect)):
+                size = max(size, abs(rect.top - rect.bottom))
         pd.glyphs.append(Glyph(u, _font_name(raw, i, buf, flags), float(size), l.value, b.value, r.value, t.value,
                                ox.value, oy.value, int(R.FPDFText_GetFontWeight(raw, i))))
     for obj in page.get_objects(max_depth=4):
