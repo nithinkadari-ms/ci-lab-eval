@@ -6,7 +6,7 @@ on:
       mode:
         description: "probe (prep, Test 1 tools and logic, CDM verification), logic (logic rebuild only), full (everything)"
         type: choice
-        options: [probe, logic, models, final, full]
+        options: [probe, logic, models, final, full, report]
         default: probe
       from_runs:
         description: "final mode: comma-separated earlier run ids whose acc/t2 artifacts are reused"
@@ -149,7 +149,7 @@ jobs:
           retention-days: 14
 
   t1-logic:
-    if: ${{ (inputs.mode || 'probe') != 'models' }}
+    if: ${{ (inputs.mode || 'probe') != 'models' && (inputs.mode || 'probe') != 'report' }}
     needs: prep-data
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -435,7 +435,7 @@ jobs:
 
   report:
     needs: [t1-logic, t1-tools, acc, t2-dec, t2-split, cdm]
-    if: ${{ !cancelled() && needs.t1-logic.result == 'success' }}
+    if: ${{ !cancelled() && (needs.t1-logic.result == 'success' || (inputs.mode || 'probe') == 'report') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     defaults: { run: { working-directory: formula } }
@@ -465,13 +465,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           for id in $(echo "${{ inputs.from_runs }}" | tr ',' ' '); do
-            for kind in acc t2; do
+            for kind in acc t2 t1 cdm; do
               mkdir -p /tmp/prev/$id/$kind results/$kind
               gh run download $id -R ${{ github.repository }} -p "$kind*" -D /tmp/prev/$id/$kind || true
               find /tmp/prev/$id/$kind -name '*.jsonl' -exec cp -n {} results/$kind/ \;
             done
           done
-          ls results/acc | wc -l; ls results/t2 | wc -l
+          ls results/acc | wc -l; ls results/t2 | wc -l; ls results/t1; ls results/cdm | wc -l
       - run: |
           python r3/eval_r3.py > /dev/null
           cat results/report_r3.md >> "$GITHUB_STEP_SUMMARY"
