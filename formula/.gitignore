@@ -1,0 +1,10 @@
+data/
+models/
+manifests/
+results/
+__pycache__/
+tools/
+r3/cdm/_upstream/
+r3/rust/target/
+r3/go/bin/
+r3/go/third_party/
