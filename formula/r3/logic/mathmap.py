@@ -205,6 +205,8 @@ def decode_char(u, font, raw=False):
     b = base_font(font)
     if u in PIECES:
         return "piece:" + PIECES[u], False
+    if "esint" in b and not (0x222B <= u <= 0x2233 or 0x2A0B <= u <= 0x2A1C):
+        return "∫", False
     if role == "ex" and u < 0x80 and (raw or chr(u) not in "()[]{}|/\\<>"):
         return OMX.get(u, None), u not in OMX
     if u < 0x20 or (role == "sy" and u < 0x80 and not chr(u).isalnum() and chr(u) not in "()[]{}|/,.;:<>=+-*'\\!"):

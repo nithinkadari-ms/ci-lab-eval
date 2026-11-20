@@ -109,11 +109,17 @@ def page_data(pdf, page_index):
     return pd
 
 
-def select(pd, bbox, pad=0.6):
+def select(pd, bbox, pad=0.6, display=False):
     x0, y0, x1, y1 = bbox
     X0, Y0, X1, Y1 = x0 - pad, y0 - pad, x1 + pad, y1 + pad
     gs = [g for g in pd.glyphs if X0 <= (g.x0 + g.x1) / 2 <= X1 and Y0 <= (g.y0 + g.y1) / 2 <= Y1]
     ss = [s for s in pd.shapes if X0 <= (s.x0 + s.x1) / 2 <= X1 and Y0 <= (s.y0 + s.y1) / 2 <= Y1]
+    if display and gs:
+        last = max(gs, key=lambda g: g.x1)
+        cands = [g for g in pd.glyphs if chr(g.u) in ".,;" and g.x0 >= X1 - 1.0 and g.x0 - last.x1 <= 0.6 * last.size
+                 and Y0 <= (g.y0 + g.y1) / 2 <= Y1 and g not in gs]
+        if cands:
+            gs = gs + [min(cands, key=lambda g: g.x0)]
     return gs, ss
 
 

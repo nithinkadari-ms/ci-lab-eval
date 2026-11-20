@@ -219,6 +219,11 @@ def x_groups(items, size):
         for q_ in range(p_ + 1, n):
             b = items[q_]
             ov = min(a.x1, b.x1) - max(a.x0, b.x0)
+            for sd, rl in ((a, b), (b, a)):
+                if sd.kind == "rad" and not sd.is_rule and rl.is_rule and rl.kind == "hrule" and \
+                        sd.x1 - 0.5 * max(sd.size, 4) <= rl.x0 <= sd.x1 + 0.5 * max(sd.size, 4) and rl.y0 >= sd.cy and \
+                        rl.y0 <= sd.y1 + 0.3 * max(sd.size, 4):
+                    parent[find(p_)] = find(q_)
             if ov <= 0:
                 continue
             yov = min(a.y1, b.y1) - max(a.y0, b.y0)
@@ -253,7 +258,8 @@ def y_rows(items, size, region_w, strict=True):
     groups = groups[::-1]  # top to bottom
 
     def solid(g):
-        gl = [i for i in g if not i.is_rule and i.kind != "accent" and i.h >= 0.3 * size]
+        gl = [i for i in g if not i.is_rule and i.kind != "accent" and
+              (i.h >= 0.3 * size or (not strict and i.kind in ("bin", "rel") and i.w >= 0.3 * size))]
         if not gl:
             return False
         ms = max(i.size for i in gl)
@@ -352,7 +358,29 @@ def merge_word_limits(groups, size):
         rels = [i for i in g if not i.is_rule and i.kind == "rel" and "arrow" in i.tok and i.size >= 0.9 * size]
         return rels[0] if len(rels) == 1 else None
 
+    def word_part(g):
+        large = big_letters(g)
+        if not large or any(font_role(i.font)[0] != "rm" for i in large):
+            return False
+        small = [i for i in g if i not in large and not i.is_rule]
+        if len(large) + len(small) != len(g):
+            return False
+        return not small or (all(i.size <= 0.86 * size for i in small) and max(i.cy for i in small) < min(i.base for i in large))
+
     out = list(groups)
+    k = 0
+    while k < len(out):
+        if word_part(out[k]):
+            j = k
+            while j + 1 < len(out) and word_part(out[j + 1]) and \
+                    min(i.x0 for i in out[j + 1]) - max(i.x1 for i in big_letters(out[j])) < 0.35 * size:
+                j += 1
+            if j > k:
+                parts = out[k:j + 1]
+                word = "".join(i.ch for p in parts for i in sorted(big_letters(p), key=lambda i: i.x0))
+                if word in OPNAMES and any(len(big_letters(p)) < len(p) for p in parts):
+                    out[k:j + 1] = [[i for p in parts for i in p]]
+        k += 1
     k = 0
     while k < len(out):
         ar = arrow_of(out[k])
