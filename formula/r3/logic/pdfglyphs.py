@@ -76,7 +76,15 @@ def page_data(pdf, page_index):
             continue
         g.raw = g.font in raw_fonts
         keep.append(g)
-    pd.glyphs = keep
+    merged = []
+    for g in keep:
+        if merged and 0xDC00 <= g.u <= 0xDFFF and 0xD800 <= merged[-1].u <= 0xDBFF:
+            h = merged[-1]
+            h.u = 0x10000 + ((h.u - 0xD800) << 10) + (g.u - 0xDC00)
+            h.x0, h.y0, h.x1, h.y1 = min(h.x0, g.x0), min(h.y0, g.y0), max(h.x1, g.x1), max(h.y1, g.y1)
+            continue
+        merged.append(g)
+    pd.glyphs = merged
     for obj in page.get_objects(max_depth=4):
         typ = obj.type
         if typ not in (R.FPDF_PAGEOBJ_PATH, R.FPDF_PAGEOBJ_IMAGE, R.FPDF_PAGEOBJ_SHADING):

@@ -418,6 +418,16 @@ def split_tall_delims(items, size, ctx):
         rows = y_rows(content, main_size(content), max(i.x1 for i in content) - min(i.x0 for i in content), strict=False)
         if len(rows) < 2:
             continue
+        binom = None
+        if partner is not None and o.ch == "(" and partner.ch == ")" and len(rows) == 2:
+            bases = [statistics.median(i.base for i in r if not i.is_rule) if any(not i.is_rule for i in r) else None
+                     for r in rows]
+            rs = main_size(content)
+            single = all(max(i.y1 for i in r) - min(i.y0 for i in r) <= 1.3 * rs and
+                         not any(b.x0 - a.x1 > 0.8 * size for a, b in zip(sorted(r, key=lambda i: i.x0), sorted(r, key=lambda i: i.x0)[1:]))
+                         for r in rows)
+            if None not in bases and single and abs(bases[0] - bases[1]) >= 1.28 * rs:
+                binom = "\\binom{" + parse_row(rows[0], ctx).tex + "}{" + parse_row(rows[1], ctx).tex + "}"
         cell_rows = []
         for r in rows:
             r = sorted(r, key=lambda i: i.x0)
@@ -438,7 +448,7 @@ def split_tall_delims(items, size, ctx):
             mtx = Atom(mid, "stack", o.x0, o.y0, right, o.y1, None, size)
             rest = [i for i in items if i is not o and i not in content and i not in left]
         else:
-            mid = o.tok + " \\begin{matrix} " + body + " \\end{matrix} " + partner.tok
+            mid = binom or (o.tok + " \\begin{matrix} " + body + " \\end{matrix} " + partner.tok)
             left = [i for i in items if i.cx < o.x0 and i not in content]
             mtx = Atom(mid, "stack", o.x0, min(o.y0, partner.y0), partner.x1, max(o.y1, partner.y1), None, size)
             rest = [i for i in items if i is not o and i is not partner and i not in content and i not in left]
@@ -790,6 +800,11 @@ def repair(tex):
             depth -= 1
         out.append(ch)
     tex = "".join(out) + "}" * depth
+    for _ in range(6):
+        tex2 = re.sub(r"\\(mathtt|mathsf|mathrm)\{([^{}]*)\}\s*\\\1\{([^{}]*)\}", r"\\\1{\2\3}", tex)
+        if tex2 == tex:
+            break
+        tex = tex2
     return tex
 
 

@@ -35,3 +35,11 @@ for rid in sys.argv[2].split(","):
     print("selected shapes", [(s.kind, round(s.x0, 2), round(s.y0, 2), round(s.x1, 2), round(s.y1, 2)) for s in ss])
     for g in sorted(gs, key=lambda g: g.x0)[:60]:
         print(f"  U+{g.u:04X} {chr(g.u) if g.u > 31 else '?'} {g.font[:28]:28s} size={g.size:.2f} box=({g.x0:.1f},{g.y0:.1f},{g.x1:.1f},{g.y1:.1f}) origin=({g.ox:.1f},{g.oy:.1f})")
+    sel = set(id(g) for g in gs)
+    for g in sorted(pd.glyphs, key=lambda g: g.x0):
+        if id(g) in sel:
+            continue
+        if g.x1 >= x0 - 10 and g.x0 <= x1 + 10 and g.y1 >= y0 - 4 and g.y0 <= y1 + 4:
+            print(f"  OUT U+{g.u:04X} {chr(g.u) if g.u > 31 else '?'} {g.font[:28]:28s} size={g.size:.2f} box=({g.x0:.1f},{g.y0:.1f},{g.x1:.1f},{g.y1:.1f})")
+    from build import rebuild
+    print("  REBUILD:", rebuild(gs, ss))

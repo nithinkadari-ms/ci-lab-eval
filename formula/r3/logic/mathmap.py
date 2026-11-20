@@ -34,8 +34,8 @@ def font_role(name):
     """Coarse role of a font: mi (math italic), rm, sy, ex, bb, frak, scr, cal, tt, sf, plus a bold flag."""
     b = base_font(name)
     bold = any(k in b for k in ("cmbx", "cmmib", "cmbsy", "bold", "-bd", "-bx", "lmroman10-bold", "semibold", "-medi", "medium"))
-    if "msbm" in b or "doublestruck" in b or "bbold" in b or "dsrom" in b:
-        return "bb", bold
+    if "msbm" in b or "doublestruck" in b or "bbold" in b or "dsrom" in b or "blackboard" in b or "bbm" in b:
+        return "bb", False
     if "eufm" in b or "eufb" in b or "fraktur" in b:
         return "frak", bold
     if "rsfs" in b or "script" in b and "math" not in b:
@@ -102,7 +102,7 @@ SYM = {
     "+": ("+", "bin"), "−": ("-", "bin"), "-": ("-", "bin"), "–": ("-", "bin"), "×": ("\\times", "bin"),
     "·": ("\\cdot", "bin"), "⋅": ("\\cdot", "bin"), "∙": ("\\cdot", "bin"), "÷": ("\\div", "bin"), "±": ("\\pm", "bin"),
     "∓": ("\\mp", "bin"), "∗": ("*", "bin"), "*": ("*", "bin"), "⋆": ("\\star", "bin"), "∘": ("\\circ", "bin"),
-    "○": ("\\bigcirc", "bin"), "•": ("\\bullet", "bin"), "⊕": ("\\oplus", "bin"), "⊖": ("\\ominus", "bin"),
+    "○": ("\\bigcirc", "bin"), "◦": ("\\circ", "bin"), "✷": ("\\Box", "ord"), "•": ("\\bullet", "bin"), "⊕": ("\\oplus", "bin"), "⊖": ("\\ominus", "bin"),
     "⊗": ("\\otimes", "bin"), "⊘": ("\\oslash", "bin"), "⊙": ("\\odot", "bin"), "∪": ("\\cup", "bin"),
     "∩": ("\\cap", "bin"), "⊎": ("\\uplus", "bin"), "∧": ("\\wedge", "bin"), "∨": ("\\vee", "bin"),
     "∖": ("\\setminus", "bin"), "⊔": ("\\sqcup", "bin"), "⊓": ("\\sqcap", "bin"), "⋄": ("\\diamond", "bin"),
@@ -173,7 +173,7 @@ def math_alnum(ch):
             or name.startswith("BLACK-LETTER") or name.startswith("PLANCK") or name.startswith("SCRIPT SMALL")):
         return None
     base = unicodedata.normalize("NFKC", ch)
-    if not (len(base) == 1 and (base.isalnum() or base in GREEK)):
+    if not (len(base) == 1 and ((base.isascii() and base.isalnum()) or base in GREEK)):
         return None
     style = None
     if "DOUBLE-STRUCK" in name:
@@ -216,6 +216,8 @@ def decode_char(u, font, raw=False):
             return OT1.get(u), u not in OT1
     if role == "mi" and u in (0x3C, 0x3E, 0x3D) and "cmmi" in b:
         return OML.get(u), False
+    if u in (0xF6BE, 0xF6BF):
+        return ("ȷ" if u == 0xF6BE else "ı"), False
     if 0xE000 <= u <= 0xF8FF or u == 0xFFFD:
         return None, True
     return chr(u), False
@@ -255,6 +257,8 @@ def to_latex(ch, font):
         return (f"\\mathbf{{{ch}}}" if bold else ch), "digit"
     if role == "bb" and ch == "1":
         return "\\mathbb{1}", "letter"
+    if ch == "\\" and role == "sy":
+        return "\\setminus", "bin"
     if ch in SYM:
         return SYM[ch]
     n = unicodedata.normalize("NFKC", ch)

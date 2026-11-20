@@ -172,7 +172,7 @@ jobs:
           python r3/common/mk_regions.py results/t1/regions.jsonl
           python r3/logic/run_logic.py --input results/t1/regions.jsonl --output results/t1/logic.jsonl --workers $(nproc)
           python r3/logic_quick.py results/t1/logic.jsonl
-          python r3/logic/debug_region.py results/t1/regions.jsonl "arxiv/2611.22451v1_disp20,arxiv/2611.15525v1_disp07,arxiv/2611.24227v1_disp12" || true
+          python r3/logic/debug_region.py results/t1/regions.jsonl "arxiv/2611.23493v1_disp16,arxiv/2611.23658v1_disp13,arxiv/2611.21910v1_disp10,arxiv/2611.21219v1_disp14,arxiv/2611.20030v1_disp15" || true
       - uses: actions/upload-artifact@v4
         with:
           name: t1-logic
