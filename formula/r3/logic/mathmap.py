@@ -118,7 +118,7 @@ SYM = {
     "⊒": ("\\sqsupseteq", "rel"), "≺": ("\\prec", "rel"), "≻": ("\\succ", "rel"), "⪯": ("\\preceq", "rel"),
     "⪰": ("\\succeq", "rel"), "≲": ("\\lesssim", "rel"), "≳": ("\\gtrsim", "rel"), "≔": (":=", "rel"),
     "⊢": ("\\vdash", "rel"), "⊣": ("\\dashv", "rel"), "⊨": ("\\models", "rel"), "⊥": ("\\perp", "ord"),
-    "∥": ("\\parallel", "rel"), "∣": ("\\mid", "rel"), "≜": ("\\triangleq", "rel"), "≐": ("\\doteq", "rel"),
+    "∥": ("\\|", "fence"), "∣": ("\\mid", "rel"), "≜": ("\\triangleq", "rel"), "≐": ("\\doteq", "rel"),
     "≱": ("\\ngeq", "rel"), "⊲": ("\\triangleleft", "bin"), "⊳": ("\\triangleright", "bin"),
     "⊴": ("\\trianglelefteq", "rel"), "⊵": ("\\trianglerighteq", "rel"), "≅": ("\\cong", "rel"),
     "→": ("\\rightarrow", "rel"), "←": ("\\leftarrow", "rel"), "↔": ("\\leftrightarrow", "rel"),
@@ -188,10 +188,21 @@ def math_alnum(ch):
     return style, bold, base
 
 
+PIECES = {}
+for _codes, _ch in [((0xF8EB, 0xF8EC, 0xF8ED, 0x239B, 0x239C, 0x239D), "("), ((0xF8F6, 0xF8F7, 0xF8F8, 0x239E, 0x239F, 0x23A0), ")"),
+                    ((0xF8EE, 0xF8EF, 0xF8F0, 0x23A1, 0x23A2, 0x23A3), "["), ((0xF8F9, 0xF8FA, 0xF8FB, 0x23A4, 0x23A5, 0x23A6), "]"),
+                    ((0xF8F1, 0xF8F2, 0xF8F3, 0x23A7, 0x23A8, 0x23A9), "{"), ((0xF8FC, 0xF8FD, 0xF8FE, 0x23AB, 0x23AC, 0x23AD), "}"),
+                    ((0xF8F4, 0x23AA), "brace-ext"), ((0xF8E6, 0x23D0), "|"), ((0x23B7,), "√")]:
+    for _c in _codes:
+        PIECES[_c] = _ch
+
+
 def decode_char(u, font):
     """Return (char, unknown_flag) after encoding fallbacks for fonts without ToUnicode."""
     role, _ = font_role(font)
     b = base_font(font)
+    if u in PIECES:
+        return "piece:" + PIECES[u], False
     if role == "ex" and u < 0x80 and chr(u) not in "()[]{}|/\\<>":
         return OMX.get(u, None), u not in OMX
     if u < 0x20 or (role == "sy" and u < 0x80 and not chr(u).isalnum() and u not in (0x28, 0x29, 0x5B, 0x5D, 0x7B, 0x7D, 0x7C, 0x2F, 0x2C)):
@@ -212,6 +223,10 @@ def to_latex(ch, font):
     """-> (latex, kind) for one decoded character. kind: letter, digit, bin, rel, ord, open, close, fence, punct,
     bigop, rad, accent, prime, not, unknown."""
     role, bold = font_role(font)
+    if len(ch) == 1 and ch not in GREEK and ch not in SYM and not math_alnum(ch):
+        n = unicodedata.normalize("NFKC", ch)
+        if len(n) == 1 and (n in GREEK or n in SYM):
+            ch = n
     ma = math_alnum(ch)
     if ma:
         style, bold2, base = ma
@@ -235,7 +250,7 @@ def to_latex(ch, font):
             tok = f"\\mathbf{{{tok}}}"
         return tok, "letter"
     if ch.isdigit() and ch.isascii():
-        return (f"\\mathbf{{{ch}}}" if bold and role == "rm" and False else ch), "digit"
+        return (f"\\mathbf{{{ch}}}" if bold else ch), "digit"
     if role == "bb" and ch == "1":
         return "\\mathbb{1}", "letter"
     if ch in SYM:

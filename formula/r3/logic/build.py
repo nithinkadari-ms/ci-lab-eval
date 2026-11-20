@@ -64,6 +64,7 @@ class Atom:
     row_items: list = None
     small: bool = False
     cols: list = None
+    row_atoms: list = None
 
 
 class Ctx:
@@ -99,6 +100,9 @@ def make_items(glyphs, shapes, ctx):
             ctx.pen(0.5, f"unmapped U+{g.u:04X} {g.font}")
             items.append(Item("?", "unknown", g.x0, g.y0, g.x1, g.y1, g.oy, g.size, "", g.font))
             continue
+        if ch.startswith("piece:"):
+            items.append(Item(ch[6:], "piece", g.x0, g.y0, g.x1, g.y1, g.oy, g.size, ch[6:], g.font))
+            continue
         tok, kind = to_latex(ch, g.font)
         if tok is None:
             ctx.pen(0.5, f"no latex for {ch!r} U+{ord(ch):04X} {g.font}")
@@ -108,6 +112,7 @@ def make_items(glyphs, shapes, ctx):
         if x1 - x0 < 0.05 and y1 - y0 < 0.05:
             x1, y1 = x0 + 0.3 * g.size, y0 + 0.5 * g.size
         items.append(Item(tok, kind, x0, y0, x1, y1, g.oy, g.size, ch, g.font))
+    items = merge_pieces(items, ctx)
     for s in shapes:
         if s.kind == "hrule":
             items.append(Item("", "hrule", s.x0, s.y0, s.x1, s.y1, (s.y0 + s.y1) / 2, 0.0, is_rule=True))
@@ -120,17 +125,72 @@ def make_items(glyphs, shapes, ctx):
     return items
 
 
+def merge_pieces(items, ctx):
+    """Grown delimiters are built from stacked pieces (top, extension, bottom): merge them into one tall delimiter."""
+    pieces = [i for i in items if i.kind == "piece"]
+    if not pieces:
+        return items
+    rest = [i for i in items if i.kind != "piece"]
+    pieces.sort(key=lambda i: (round(i.x0), -i.y1))
+    groups = []
+    for p in sorted(pieces, key=lambda i: -i.y1):
+        for g in groups:
+            gx0, gx1 = min(i.x0 for i in g), max(i.x1 for i in g)
+            gy0 = min(i.y0 for i in g)
+            if min(gx1, p.x1) - max(gx0, p.x0) > 0.3 * min(gx1 - gx0, p.x1 - p.x0) and p.y1 >= gy0 - 2.0:
+                g.append(p)
+                break
+        else:
+            groups.append([p])
+    for g in groups:
+        chars = [i.ch for i in g if i.ch not in ("brace-ext", "|")]
+        ch = chars[0] if chars else ("|" if any(i.ch == "|" for i in g) else "{")
+        tok, kind = to_latex(ch, "")
+        x0, y0, x1, y1 = bbox_of(g)
+        size = max(i.size for i in g)
+        if ch == "√":
+            tok, kind = "\\sqrt", "rad"
+        rest.append(Item(tok, kind, x0, y0, x1, y1, min(i.base for i in g), size, ch, g[0].font))
+    return rest
+
+
+ARROWS = {("-", "\\rightarrow"): "\\longrightarrow", ("\\leftarrow", "-"): "\\longleftarrow",
+          ("=", "\\Rightarrow"): "\\Longrightarrow", ("\\Leftarrow", "="): "\\Longleftarrow",
+          ("\\leftarrow", "\\rightarrow"): "\\longleftrightarrow", ("\\Leftarrow", "\\Rightarrow"): "\\Longleftrightarrow",
+          ("\\mapsto", "\\rightarrow"): "\\mapsto", ("\\mapsto", "-", "\\rightarrow"): "\\longmapsto",
+          ("-", "-", "\\rightarrow"): "\\longrightarrow", ("\\leftarrow", "-", "-"): "\\longleftarrow",
+          ("\\hookleftarrow", "\\rightarrow"): "\\hookrightarrow", ("-", "\\rightharpoonup"): "\\rightharpoonup",
+          (":", "="): ":=", ("=", ":"): "=:"}
+
+
 # ---------------------------------------------------------------- cuts
 def x_groups(items, size):
+    """Connected components: items overlapping clearly in x, or overlapping in x while stacked (y-disjoint)."""
     tol = 0.12 * size
-    out = []
-    for it in sorted(items, key=lambda i: (i.x0, i.x1)):
-        if out and it.x0 < out[-1][1] - tol:
-            out[-1][0].append(it)
-            out[-1][1] = max(out[-1][1], it.x1)
-        else:
-            out.append([[it], it.x1])
-    return [g for g, _ in out]
+    n = len(items)
+    parent = list(range(n))
+
+    def find(k):
+        while parent[k] != k:
+            parent[k] = parent[parent[k]]
+            k = parent[k]
+        return k
+
+    for p_ in range(n):
+        a = items[p_]
+        for q_ in range(p_ + 1, n):
+            b = items[q_]
+            ov = min(a.x1, b.x1) - max(a.x0, b.x0)
+            if ov <= 0:
+                continue
+            ydis = a.y1 < b.y0 or b.y1 < a.y0
+            if ov > tol or (ydis and ov > 0.15 * min(max(a.w, 0.01), max(b.w, 0.01))):
+                parent[find(p_)] = find(q_)
+    comps = {}
+    for k in range(n):
+        comps.setdefault(find(k), []).append(items[k])
+    return sorted(comps.values(), key=lambda g: min(i.x0 for i in g))
+
 
 
 def y_rows(items, size, region_w, strict=True):
@@ -200,12 +260,13 @@ def parse_block(items, ctx, top=False):
     x0, y0, x1, y1 = bbox_of(items)
     rows = y_rows(items, size, x1 - x0)
     if len(rows) > 1:
-        rtex = [parse_row(r, ctx).tex for r in rows]
+        ratoms = [parse_row(r, ctx) for r in rows]
+        rtex = [ra.tex for ra in ratoms]
         if top:
             tex = "\\begin{aligned} " + " \\\\ ".join(rtex) + " \\end{aligned}"
         else:
             tex = "\\begin{matrix} " + " \\\\ ".join(rtex) + " \\end{matrix}"
-        return Atom(tex, "stack", x0, y0, x1, y1, rows_base(rows), size, rows=rtex, row_items=rows)
+        return Atom(tex, "stack", x0, y0, x1, y1, rows_base(rows), size, rows=rtex, row_items=rows, row_atoms=ratoms)
     return parse_row(items, ctx)
 
 
@@ -330,10 +391,11 @@ def parse_group(g, ctx, row_size):
             ctx.pen(0.9, "overset")
             return Atom("\\overset{" + top.tex + "}{" + bot.tex + "}", "limop", x0, y0, x1, y1, None, row_size)
     if len(rows) > 1:
-        rtex = [parse_row(r, ctx).tex for r in rows]
+        ratoms = [parse_row(r, ctx) for r in rows]
+        rtex = [ra.tex for ra in ratoms]
         sm = max((i.size for i in glyphs), default=row_size)
         return Atom("\\begin{matrix} " + " \\\\ ".join(rtex) + " \\end{matrix}", "stack", x0, y0, x1, y1,
-                    rows_base(rows), sm, rows=rtex, row_items=rows, small=sm <= 0.85 * row_size)
+                    rows_base(rows), sm, rows=rtex, row_items=rows, small=sm <= 0.85 * row_size, row_atoms=ratoms)
     # overlapping glyphs (e.g. negated relations, kerning) -> left-to-right
     if any(i.tok == "\\not" for i in g):
         others = [i for i in g if i.tok != "\\not"]
@@ -344,6 +406,9 @@ def parse_group(g, ctx, row_size):
     if len(glyphs) == 2 and {glyphs[0].ch, glyphs[1].ch} <= {"=", "/"} and any(i.ch == "/" for i in glyphs):
         return Atom("\\neq", "rel", x0, y0, x1, y1, glyphs[0].base, glyphs[0].size)
     seq = sorted(g, key=lambda i: i.x0)
+    key = tuple(i.tok for i in seq if not i.is_rule)
+    if key in ARROWS and all(not i.is_rule for i in seq):
+        return Atom(ARROWS[key], "rel", x0, y0, x1, y1, statistics.median(i.base for i in seq), max(i.size for i in seq))
     if len(seq) > 1:
         sub_atoms = [parse_group([i], ctx, row_size) for i in seq]
         a = assemble(sub_atoms, ctx)
@@ -398,10 +463,10 @@ def assemble(atoms, ctx):
             if shift > -0.12 * msize:
                 ctx.pen(0.95, "marginal subscript")
             return -1
-        if not small and shift > 0.45 * msize and a.kind in ("letter", "digit"):
-            ctx.pen(0.9, "full-size raised")
-            return 1
         return 0
+
+    def is_small(a):
+        return a.kind not in ("bigop", "limop", "open", "close", "fence", "frac", "stack") and a.size <= 0.86 * msize
 
     atoms = merge_columns(atoms, msize)
     out = []  # list of [tex, kind, atom]
@@ -414,21 +479,39 @@ def assemble(atoms, ctx):
             out.append([a.tex, a.kind, a])
             i += 1
             continue
-        if lv == 2:
-            sup, sub = a.rows[0], a.rows[1]
-            attach(out, f"^{{{sup}}}_{{{sub}}}")
-            i += 1
-            continue
-        run = [a]
-        j = i + 1
-        while j < n and level(atoms[j]) == lv:
-            run.append(atoms[j])
+        # a cluster of script material after one base: split it into the superscript and subscript streams
+        sups, subs, last = [], [], None
+        j = i
+        while j < n:
+            b = atoms[j]
+            lb = level(b)
+            if lb == 0:
+                if last is not None and is_small(b):
+                    lb = last
+                else:
+                    break
+            if lb == 2:
+                ra = b.row_atoms or []
+                if len(ra) == 2:
+                    sups.append(ra[0])
+                    subs.append(ra[1])
+                last = -1
+            elif lb == 1:
+                sups.append(b)
+                last = 1
+            else:
+                subs.append(b)
+                last = -1
             j += 1
-        if all(r.kind == "prime" for r in run):
-            content = "".join("\\prime" for _ in run)
-        else:
-            content = assemble(run, ctx).tex
-        attach(out, ("^" if lv > 0 else "_") + "{" + content + "}")
+        script = ""
+        if subs:
+            script += "_{" + assemble(subs, ctx).tex + "}"
+        if sups:
+            if all(r.kind == "prime" for r in sups):
+                script += "^{" + "".join("\\prime" for _ in sups) + "}"
+            else:
+                script += "^{" + assemble(sups, ctx).tex + "}"
+        attach(out, script)
         i = j
     toks = merge_words(out)
     toks = fences(toks)
