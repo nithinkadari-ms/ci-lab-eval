@@ -55,10 +55,14 @@ def page_data(pdf, page_index):
     pd = PageData()
     for i in range(n):
         u = R.FPDFText_GetUnicode(raw, i)
-        if u in (0x0D, 0x0A) or R.FPDFText_IsGenerated(raw, i) == 1:
+        if R.FPDFText_IsGenerated(raw, i) == 1:
             continue
         if not R.FPDFText_GetCharBox(raw, i, ctypes.byref(l), ctypes.byref(r), ctypes.byref(b), ctypes.byref(t)):
             continue
+        if u in (0x0D, 0x0A):
+            from mathmap import font_role as _fr
+            if _fr(_font_name(raw, i, buf, flags))[0] != "ex" or r.value - l.value < 0.5 or t.value - b.value < 1.0:
+                continue
         R.FPDFText_GetCharOrigin(raw, i, ctypes.byref(ox), ctypes.byref(oy))
         size = R.FPDFText_GetFontSize(raw, i)
         if size < 2.0:

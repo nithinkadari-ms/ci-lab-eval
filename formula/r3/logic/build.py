@@ -418,6 +418,33 @@ def merge_word_limits(groups, size):
     return out
 
 
+def baseline_rows(content):
+    """Rows of a matrix whose scripts touch the next row: cluster the baselines of full-size glyphs, then give
+    every item to the row whose glyph centre line is nearest. Not used when the content has rules."""
+    if any(i.is_rule for i in content):
+        return [content]
+    ms = main_size(content)
+    full = [i for i in content if not i.is_rule and i.size >= 0.88 * ms and
+            i.kind not in ("bigop", "rad", "open", "close", "fence", "piece") and i.h <= 1.3 * ms]
+    if len(full) < 2:
+        return [content]
+    full.sort(key=lambda i: -i.base)
+    clusters = [[full[0]]]
+    for it in full[1:]:
+        if clusters[-1][-1].base - it.base > 0.9 * ms:
+            clusters.append([it])
+        else:
+            clusters[-1].append(it)
+    if len(clusters) < 2:
+        return [content]
+    mids = [statistics.median(i.base for i in c) + 0.3 * ms for c in clusters]
+    rows = [[] for _ in clusters]
+    for it in content:
+        k = min(range(len(mids)), key=lambda k: abs(it.cy - mids[k]))
+        rows[k].append(it)
+    return [r for r in rows if r]
+
+
 def split_tall_delims(items, size, ctx):
     """Matrices, arrays and cases: content between a tall opening delimiter and its partner (or a lone tall '{')
     that has several rows is laid out as rows (whole-width gaps) and cells (wide horizontal gaps)."""
@@ -444,6 +471,8 @@ def split_tall_delims(items, size, ctx):
             if o.ch != "{":
                 continue
         rows = y_rows(content, main_size(content), max(i.x1 for i in content) - min(i.x0 for i in content), strict=False)
+        if len(rows) < 2:
+            rows = baseline_rows(content)
         if len(rows) < 2:
             continue
         binom = None
@@ -544,8 +573,15 @@ def parse_group(g, ctx, row_size):
         s_ = min(surds, key=lambda i: i.x0)
         bar = rad_bars.get(id(s_))
         if bar is not None:
-            inner = [i for i in g if i is not s_ and i is not bar and i.cx > bar.x0 and i.cx <= bar.x1 + 0.5 and i.cy < bar.y0]
-            idx = [i for i in g if i is not s_ and i is not bar and i.cx < s_.x1 and i.cy > s_.cy and i not in inner]
+            idx = [i for i in g if i is not s_ and i is not bar and not i.is_rule and i.cy > s_.cy and
+                   i.x0 < bar.x0 - 0.2 and i.size <= 0.8 * max(s_.size, 1.0)]
+            if idx:
+                ix1 = max(i.x1 for i in idx)
+                idx += [i for i in g if i is not s_ and i is not bar and not i.is_rule and i not in idx and i.cy > s_.cy
+                        and i.size <= 0.8 * max(s_.size, 1.0) and i.x0 < ix1 + 0.3 * i.size and
+                        abs(i.base - idx[0].base) < 0.3 * i.size]
+            inner = [i for i in g if i is not s_ and i is not bar and i.cx > bar.x0 and i.cx <= bar.x1 + 0.5
+                     and i.cy < bar.y0 and i not in idx]
             rest = [i for i in g if i is not s_ and i is not bar and i not in inner and i not in idx]
             body = parse_block(inner, ctx).tex if inner else ""
             tex = f"\\sqrt{{{body}}}" if not idx else f"\\sqrt[{parse_block(idx, ctx).tex}]{{{body}}}"
@@ -672,7 +708,7 @@ def assemble(atoms, ctx):
     def level(a):
         if a.kind in ("bigop", "limop") or a.base is None:
             return 0
-        if a.kind in ("open", "close", "fence") and a.size > 0.86 * msize:
+        if a.kind in ("open", "close", "fence") and (a.size > 0.86 * msize or a.y1 - a.y0 >= 0.9 * msize):
             return 0
         if a.kind == "stack":
             if a.small and a.rows and len(a.rows) == 2:
@@ -812,8 +848,16 @@ def fences(toks):
 
 
 # ---------------------------------------------------------------- repair + driver
+LONG_ARROWS = [(r"\\Leftarrow \\Rightarrow", r"\\Longleftrightarrow"), (r"\\Leftarrow =", r"\\Longleftarrow"),
+               (r"= \\Rightarrow", r"\\Longrightarrow"), (r"\\leftarrow \\rightarrow", r"\\longleftrightarrow"),
+               (r"\\leftarrow -", r"\\longleftarrow"), (r"- \\rightarrow", r"\\longrightarrow")]
+
+
 def repair(tex):
     tex = re.sub(r"\s+", " ", tex).strip()
+    for a, b in LONG_ARROWS:
+        tex = re.sub(r"(?<![A-Za-z])" + a + r"(?![A-Za-z])", b, tex)
+    tex = re.sub(r"\\longrightarrow ?\^\{((?:[^{}]|\{[^{}]*\})*)\}", r"\\xrightarrow{\1}", tex)
     tex = re.sub(r"\^\{\s*\^\{((?:\\prime\s*)+)\}\s*\}", r"^{\1}", tex)
     for _ in range(3):
         tex = re.sub(r"[\^_]\{\s*\}", "", tex)
@@ -830,6 +874,7 @@ def repair(tex):
     tex = "".join(out) + "}" * depth
     for _ in range(6):
         tex2 = re.sub(r"\\(mathtt|mathsf|mathrm)\{([^{}]*)\}\s*\\\1\{([^{}]*)\}", r"\\\1{\2\3}", tex)
+        tex2 = re.sub(r"\\mathbb\{([A-Z]+)\}\s*\\mathbb\{([A-Z])\}", r"\\mathbb{\1\2}", tex2)
         if tex2 == tex:
             break
         tex = tex2
