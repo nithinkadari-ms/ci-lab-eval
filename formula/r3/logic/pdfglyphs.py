@@ -99,7 +99,7 @@ def page_data(pdf, page_index):
         x0, y0, x1, y1 = bl.value, bb.value, br.value, bt.value
         w, h = x1 - x0, y1 - y0
         if typ == R.FPDF_PAGEOBJ_IMAGE:
-            pd.shapes.append(Shape("image", x0, y0, x1, y1))
+            pd.shapes.append(Shape("hrule" if (h <= 1.6 and w >= 2.0) else "image", x0, y0, x1, y1))
         elif typ == R.FPDF_PAGEOBJ_SHADING:
             pd.shapes.append(Shape("path", x0, y0, x1, y1))
         elif h <= 1.6 and w >= 1.0:
@@ -117,7 +117,8 @@ def select(pd, bbox, pad=0.6, display=False):
     x0, y0, x1, y1 = bbox
     X0, Y0, X1, Y1 = x0 - pad, y0 - pad, x1 + pad, y1 + pad
     gs = [g for g in pd.glyphs if X0 <= (g.x0 + g.x1) / 2 <= X1 and Y0 <= (g.y0 + g.y1) / 2 <= Y1]
-    ss = [s for s in pd.shapes if X0 <= (s.x0 + s.x1) / 2 <= X1 and Y0 <= (s.y0 + s.y1) / 2 <= Y1]
+    ss = [s for s in pd.shapes if X0 <= (s.x0 + s.x1) / 2 <= X1 and Y0 <= (s.y0 + s.y1) / 2 <= Y1
+          and s.x0 >= X0 - 3.0 and s.x1 <= X1 + 3.0]
     if display and gs:
         last = max(gs, key=lambda g: g.x1)
         cands = [g for g in pd.glyphs if chr(g.u) in ".,;" and g.x0 >= X1 - 1.0 and g.x0 - last.x1 <= 0.6 * last.size
