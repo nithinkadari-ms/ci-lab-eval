@@ -339,6 +339,10 @@ def test7():
 
     def common_table(title, systems, sel):
         systems = [x for x in systems if x in data]
+        partial = [x for x in systems if len(scope(x) - set(data[x])) > 0.05 * max(1, len(scope(x)))]
+        if partial:
+            OUT.append("\n" + f"(left out of the next table because more than 5% of their ids have no output: {', '.join(partial)})")
+            systems = [x for x in systems if x not in partial]
         common = None
         for x in systems:
             ok = {i for i, r in data[x].items() if sel(i) and r.get("status") in ("ok", "pred_render_fail")}
