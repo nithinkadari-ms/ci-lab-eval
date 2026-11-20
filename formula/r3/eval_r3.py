@@ -303,36 +303,67 @@ def test7():
     if gate and "logic" in data and "p2t15_int8" in data:
         hy = {}
         for i, r in data["p2t15_int8"].items():
-            if i.startswith("arxiv/") and gate["conf"].get(i, 0) >= gate["tau"] and gate["logic"].get(i) and i in data["logic"]:
+            if not i.startswith("arxiv/"):
+                continue
+            if gate["conf"].get(i, 0) >= gate["tau"] and gate["logic"].get(i) and i in data["logic"]:
                 hy[i] = data["logic"][i]
             else:
                 hy[i] = r
         data["hybrid_logic"] = hy
-    groups = [("all 3000 (models)", lambda i: True), ("arXiv part", lambda i: i.startswith("arxiv/")),
-              ("UniMER part", lambda i: not i.startswith("arxiv/"))]
+    T1 = {"logic", "pdfmath", "rustypaper", "kakemono", "gopdfkit", "hybrid_logic"}
+    t2_ids = set()
+    t2m = os.path.join(ROOT, "manifests", "t2.json")
+    if os.path.exists(t2m):
+        t2_ids = {it["id"] for it in json.load(open(t2m, encoding="utf-8"))}
+
+    def scope(name):
+        if name in T1:
+            return {i for i in sub if i.startswith("arxiv/")}
+        if name.startswith("t2_"):
+            return sub & t2_ids
+        return set(sub)
+
     rows = []
     for name, d in sorted(data.items()):
         st = Counter(r.get("status") for r in d.values())
         ok_gt = [i for i, r in d.items() if r.get("status") in ("ok", "pred_render_fail")]
         f1 = [d[i]["cdm_f1"] or 0.0 for i in ok_gt]
-        rows.append((name, len(d), st.get("ok", 0), st.get("pred_render_fail", 0), st.get("gt_render_fail", 0), st.get("error", 0),
-                     f"{statistics.mean(f1):.4f}" if f1 else "-", f"{100 * sum(1 for x in f1 if x >= 0.9999) / len(f1):.1f}" if f1 else "-"))
+        sc = scope(name)
+        rows.append((name, len(sc), len(d), len(sc - set(d)), st.get("ok", 0), st.get("pred_render_fail", 0), st.get("gt_render_fail", 0),
+                     st.get("error", 0), f"{statistics.mean(f1):.4f}" if f1 else "-",
+                     f"{100 * sum(1 for x in f1 if x >= 0.9999) / len(f1):.1f}" if f1 else "-"))
+        SUMMARY[f"cdm_{name}"] = {"scope": len(sc), "inputs": len(d), "missing": len(sc - set(d)),
+                                  "mean_f1": statistics.mean(f1) if f1 else None}
     table("Per system: coverage and mean CDM F1 over ids whose ground truth rendered (pred render failure counts as 0)", rows,
-          ["system", "inputs", "ok", "pred render fail", "gt render fail", "error", "mean CDM F1", "CDM exact %"])
-    # common-id comparison per domain
-    for name, sel in groups[1:]:
-        cand = [s for s, d in data.items() if any(sel(i) for i in d)]
+          ["system", "ids in scope", "scored", "missing", "ok", "pred render fail", "gt render fail", "error", "mean CDM F1", "CDM exact %"])
+
+    def common_table(title, systems, sel):
+        systems = [x for x in systems if x in data]
         common = None
-        for s in cand:
-            ok = {i for i, r in data[s].items() if sel(i) and r.get("status") in ("ok", "pred_render_fail")}
+        for x in systems:
+            ok = {i for i, r in data[x].items() if sel(i) and r.get("status") in ("ok", "pred_render_fail")}
             common = ok if common is None else common & ok
         if not common:
-            continue
+            return
+        base = data.get("p2t15_int8")
         rows = []
-        for s in sorted(cand, key=lambda s: -statistics.mean((data[s][i]["cdm_f1"] or 0) for i in common)):
-            f1 = [(data[s][i]["cdm_f1"] or 0) for i in common]
-            rows.append((s, len(common), f"{statistics.mean(f1):.4f}", f"{100 * sum(1 for x in f1 if x >= 0.9999) / len(f1):.1f}"))
-        table(f"CDM on common ids, {name}", rows, ["system", "n", "mean CDM F1", "CDM exact %"])
+        for x in sorted(systems, key=lambda x: -statistics.mean((data[x][i]["cdm_f1"] or 0) for i in common)):
+            f1 = [(data[x][i]["cdm_f1"] or 0) for i in common]
+            if base is not None and x != "p2t15_int8":
+                w = sum(1 for i in common if (data[x][i]["cdm_f1"] or 0) > (base[i]["cdm_f1"] or 0) + 1e-9)
+                l = sum(1 for i in common if (data[x][i]["cdm_f1"] or 0) < (base[i]["cdm_f1"] or 0) - 1e-9)
+                vs, pv = f"+{w}/-{l}", fmtp(sign_test(w, l))
+            else:
+                vs, pv = "-", "-"
+            rows.append((x, len(common), f"{statistics.mean(f1):.4f}", f"{100 * sum(1 for v in f1 if v >= 0.9999) / len(f1):.1f}", vs, pv))
+        table(title, rows, ["system", "n", "mean CDM F1", "CDM exact %", "per-formula F1 vs INT8 (higher/lower)", "p"])
+
+    models = [x for x in data if x not in T1 and not x.startswith("t2_")]
+    common_table("Models on common ids, arXiv part", models, lambda i: i.startswith("arxiv/"))
+    common_table("Models on common ids, UniMER part", models, lambda i: not i.startswith("arxiv/"))
+    common_table("Test 1 systems on common arXiv ids", ["p2t15_int8"] + sorted(T1), lambda i: i.startswith("arxiv/"))
+    common_table("Test 2 systems on common ids (CPE + arXiv complex/long)", ["p2t15_int8", "p2t15_fp32"] + sorted(x for x in data if x.startswith("t2_")),
+                 lambda i: i in t2_ids)
 
 
 if __name__ == "__main__":
