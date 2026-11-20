@@ -223,7 +223,8 @@ def x_groups(items, size):
                 continue
             yov = min(a.y1, b.y1) - max(a.y0, b.y0)
             ydis = yov < 0.25 * min(max(a.h, 0.01), max(b.h, 0.01))
-            if ov > tol or (ydis and ov > 0.15 * min(max(a.w, 0.01), max(b.w, 0.01))):
+            similar = a.is_rule or b.is_rule or min(a.size, b.size) >= 0.85 * max(a.size, b.size)
+            if (ov > tol and similar) or (ydis and ov > 0.15 * min(max(a.w, 0.01), max(b.w, 0.01))):
                 parent[find(p_)] = find(q_)
     comps = {}
     for k in range(n):
@@ -344,10 +345,40 @@ def merge_word_limits(groups, size):
     def is_word(g):
         return g and all(not i.is_rule and i.kind == "letter" and i.size >= 0.9 * size and font_role(i.font)[0] == "rm" for i in g)
 
+    def is_small_only(g):
+        return all(i.is_rule or i.size <= 0.86 * size for i in g)
+
+    def arrow_of(g):
+        rels = [i for i in g if not i.is_rule and i.kind == "rel" and "arrow" in i.tok and i.size >= 0.9 * size]
+        return rels[0] if len(rels) == 1 else None
+
     out = list(groups)
     k = 0
     while k < len(out):
+        ar = arrow_of(out[k])
+        if ar is not None:
+            for side in (-1, 1):
+                while 0 <= k + side < len(out) and is_small_only(out[k + side]) and                         min(i.y0 for i in out[k + side]) >= ar.y0 + 0.3 * ar.h and                         (min(i.x0 for i in out[k]) - max(i.x1 for i in out[k + side]) if side < 0 else
+                         min(i.x0 for i in out[k + side]) - max(i.x1 for i in out[k])) < 0.4 * size:
+                    if side < 0:
+                        out[k] = out[k - 1] + out[k]
+                        del out[k - 1]
+                        k -= 1
+                    else:
+                        out[k] = out[k] + out[k + 1]
+                        del out[k + 1]
         if is_limit(out[k]):
+            lim_base = min(i.base for i in big_letters(out[k]))
+            for side in (-1, 1):
+                while 0 <= k + side < len(out) and is_small_only(out[k + side]) and                         max(i.cy for i in out[k + side]) < lim_base and                         (min(i.x0 for i in out[k]) - max(i.x1 for i in out[k + side]) if side < 0 else
+                         min(i.x0 for i in out[k + side]) - max(i.x1 for i in out[k])) < 0.5 * size:
+                    if side < 0:
+                        out[k] = out[k - 1] + out[k]
+                        del out[k - 1]
+                        k -= 1
+                    else:
+                        out[k] = out[k] + out[k + 1]
+                        del out[k + 1]
             while k > 0 and is_word(out[k - 1]) and min(i.x0 for i in out[k]) - max(i.x1 for i in out[k - 1]) < 0.35 * size:
                 out[k] = out[k - 1] + out[k]
                 del out[k - 1]
@@ -503,7 +534,8 @@ def parse_group(g, ctx, row_size):
     accs = [i for i in glyphs if i.kind == "accent"]
     if accs:
         acc = max(accs, key=lambda i: i.y1)
-        base = [i for i in g if i is not acc and i.cy < acc.cy]
+        base = [i for i in g if i is not acc and i.cy < acc.cy and
+                min(i.x1, acc.x1) - max(i.x0, acc.x0) > 0.25 * min(max(i.w, 0.01), max(acc.w, 0.01))]
         if base and acc.y0 >= max(i.y0 for i in base) + 0.3 * (max(i.y1 for i in base) - min(i.y0 for i in base)):
             rest = [i for i in g if i is not acc and i not in base]
             body = parse_block(base, ctx)
@@ -651,6 +683,11 @@ def assemble(atoms, ctx):
                     lb = last
                 else:
                     break
+            prev_atom = (subs[-1] if last == -1 and subs else sups[-1] if last == 1 and sups else None)
+            if prev_atom is not None and lb in (1, -1) and lb != last and b.kind != "stack" and                     b.size <= 0.85 * prev_atom.size and b.x0 - prev_atom.x1 < 0.3 * msize:
+                lb = last
+            if lb == 1 and b.kind == "prime" and last == -1 and subs and b.size <= subs[-1].size + 0.5:
+                lb = -1
             if lb == 2:
                 ra = b.row_atoms or []
                 if len(ra) == 2:

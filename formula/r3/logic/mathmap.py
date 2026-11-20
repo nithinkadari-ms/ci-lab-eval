@@ -33,7 +33,7 @@ def font_family(name):
 def font_role(name):
     """Coarse role of a font: mi (math italic), rm, sy, ex, bb, frak, scr, cal, tt, sf, plus a bold flag."""
     b = base_font(name)
-    bold = any(k in b for k in ("cmbx", "cmmib", "cmbsy", "bold", "-bd", "-bx", "lmroman10-bold", "semibold"))
+    bold = any(k in b for k in ("cmbx", "cmmib", "cmbsy", "bold", "-bd", "-bx", "lmroman10-bold", "semibold", "-medi", "medium"))
     if "msbm" in b or "doublestruck" in b or "bbold" in b or "dsrom" in b:
         return "bb", bold
     if "eufm" in b or "eufb" in b or "fraktur" in b:
