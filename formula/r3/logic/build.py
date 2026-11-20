@@ -138,7 +138,7 @@ def y_rows(items, size, region_w, strict=True):
     or scripts from their row."""
     if len(items) < 2:
         return [items]
-    ivs = sorted((i.y0, i.y1, i) for i in items)
+    ivs = [(i.y0, i.y1, i) for i in sorted(items, key=lambda i: (i.y0, i.y1))]
     groups, cur, top = [], [ivs[0][2]], ivs[0][1]
     for y0, y1, it in ivs[1:]:
         if y0 > top + 0.12 * size:
