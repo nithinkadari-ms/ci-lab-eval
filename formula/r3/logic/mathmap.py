@@ -173,6 +173,8 @@ def math_alnum(ch):
             or name.startswith("BLACK-LETTER") or name.startswith("PLANCK") or name.startswith("SCRIPT SMALL")):
         return None
     base = unicodedata.normalize("NFKC", ch)
+    if not (len(base) == 1 and (base.isalnum() or base in GREEK)):
+        return None
     style = None
     if "DOUBLE-STRUCK" in name:
         style = "bb"

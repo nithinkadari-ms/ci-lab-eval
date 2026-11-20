@@ -160,6 +160,11 @@ def merge_stacked_fences(items):
 def merge_pieces(items, ctx):
     """Grown delimiters are built from stacked pieces (top, extension, bottom): merge them into one tall delimiter."""
     items = merge_stacked_fences(items)
+    ex = [i for i in items if i.kind in ("open", "close", "fence") and font_role(i.font)[0] == "ex"]
+    for e in ex:
+        if any(o is not e and o in ex and min(o.x1, e.x1) - max(o.x0, e.x0) > 0.3 * min(o.w, e.w) and
+               (abs(o.y0 - e.y1) < 1.5 or abs(e.y0 - o.y1) < 1.5) for o in ex):
+            e.kind = "piece"
     pieces = [i for i in items if i.kind == "piece"]
     if not pieces:
         return items
@@ -319,9 +324,39 @@ def parse_row(items, ctx):
     m = split_tall_delims(items, size, ctx)
     if m is not None:
         return m
-    groups = x_groups(items, size)
+    groups = merge_word_limits(x_groups(items, size), size)
     atoms = [parse_group(g, ctx, size) for g in groups]
     return assemble(atoms, ctx)
+
+
+def merge_word_limits(groups, size):
+    """'lim sup', 'max', 'arg min' with a limit narrower than the word: pull the remaining upright letters of the
+    word into the group that carries the limit."""
+    def big_letters(g):
+        return [i for i in g if not i.is_rule and i.size >= 0.9 * size and i.kind == "letter"]
+
+    def is_limit(g):
+        large = big_letters(g)
+        small = [i for i in g if i not in large and not i.is_rule]
+        return bool(large) and bool(small) and len(large) + len(small) == len(g) and \
+            all(i.size <= 0.86 * size for i in small) and max(i.cy for i in small) < min(i.base for i in large)
+
+    def is_word(g):
+        return g and all(not i.is_rule and i.kind == "letter" and i.size >= 0.9 * size and font_role(i.font)[0] == "rm" for i in g)
+
+    out = list(groups)
+    k = 0
+    while k < len(out):
+        if is_limit(out[k]):
+            while k > 0 and is_word(out[k - 1]) and min(i.x0 for i in out[k]) - max(i.x1 for i in out[k - 1]) < 0.35 * size:
+                out[k] = out[k - 1] + out[k]
+                del out[k - 1]
+                k -= 1
+            while k + 1 < len(out) and is_word(out[k + 1]) and min(i.x0 for i in out[k + 1]) - max(i.x1 for i in out[k]) < 0.35 * size:
+                out[k] = out[k] + out[k + 1]
+                del out[k + 1]
+        k += 1
+    return out
 
 
 def split_tall_delims(items, size, ctx):
@@ -406,26 +441,15 @@ def parse_group(g, ctx, row_size):
     w = x1 - x0
     glyphs = [i for i in g if not i.is_rule]
     rules = [i for i in g if i.is_rule and i.kind == "hrule"]
-    # radical: surd glyph + bar starting near its right edge
     surds = [i for i in glyphs if i.kind == "rad"]
-    if surds:
-        s = min(surds, key=lambda i: i.x0)
-        bars = [r for r in rules if abs(r.x0 - s.x1) < 0.35 * max(s.size, 4) and r.y0 >= s.y0 + 0.4 * s.h]
-        if bars:
-            bar = max(bars, key=lambda r: r.w)
-            inner = [i for i in g if i is not s and i is not bar and i.cx > bar.x0 and i.cx <= bar.x1 + 0.5 and i.cy < bar.y0]
-            idx = [i for i in g if i is not s and i is not bar and i.cx < s.x1 and i.cy > s.cy and i not in inner]
-            rest = [i for i in g if i is not s and i is not bar and i not in inner and i not in idx]
-            body = parse_block(inner, ctx).tex if inner else ""
-            tex = f"\\sqrt{{{body}}}" if not idx else f"\\sqrt[{parse_block(idx, ctx).tex}]{{{body}}}"
-            a = Atom(tex, "rad", x0, y0, x1, y1, inner_base(inner, s), row_size)
-            return combine_rest(a, rest, ctx, row_size)
-        inner = [i for i in g if i is not s and i.x0 >= s.x0]
-        ctx.pen(0.75, "radical without bar")
-        body = parse_block(inner, ctx).tex if inner else ""
-        return Atom(f"\\sqrt{{{body}}}", "rad", x0, y0, x1, y1, inner_base(inner, s), row_size)
-    # fraction: widest rule with material above and below
-    for bar in sorted(rules, key=lambda r: -r.w):
+    rad_bars = {}
+    for sd in surds:
+        cands = [r for r in rules if sd.x0 - 1.0 <= r.x0 <= sd.x1 + 0.5 * max(sd.size, 4) and r.y0 >= sd.cy]
+        if cands:
+            rad_bars[id(sd)] = max(cands, key=lambda r: r.w)
+    rad_bar_ids = {id(r) for r in rad_bars.values()}
+    # fraction: widest rule (not a radical overbar) with material above and below
+    for bar in sorted([r for r in rules if id(r) not in rad_bar_ids], key=lambda r: -r.w):
         if bar.w < 0.5 * w:
             break
         above = [i for i in g if i is not bar and i.cy > bar.y1 and i.cx >= bar.x0 - 1 and i.cx <= bar.x1 + 1]
@@ -436,7 +460,6 @@ def parse_group(g, ctx, row_size):
             a = Atom(f"\\frac{{{num.tex}}}{{{den.tex}}}", "frac", bar.x0, y0, bar.x1, y1, bar.y0 - 0.25 * row_size, row_size)
             return combine_rest(a, rest, ctx, row_size)
         if above and not below:
-            # overline
             rest = [i for i in g if i is not bar and i not in above]
             if not rest:
                 body = parse_block(above, ctx)
@@ -446,6 +469,22 @@ def parse_group(g, ctx, row_size):
             if not rest:
                 body = parse_block(below, ctx)
                 return Atom(f"\\overline{{{body.tex}}}", "acc", x0, y0, x1, y1, body.base, body.size)
+    # radical: surd glyph + bar starting near its right edge
+    if surds:
+        s_ = min(surds, key=lambda i: i.x0)
+        bar = rad_bars.get(id(s_))
+        if bar is not None:
+            inner = [i for i in g if i is not s_ and i is not bar and i.cx > bar.x0 and i.cx <= bar.x1 + 0.5 and i.cy < bar.y0]
+            idx = [i for i in g if i is not s_ and i is not bar and i.cx < s_.x1 and i.cy > s_.cy and i not in inner]
+            rest = [i for i in g if i is not s_ and i is not bar and i not in inner and i not in idx]
+            body = parse_block(inner, ctx).tex if inner else ""
+            tex = f"\\sqrt{{{body}}}" if not idx else f"\\sqrt[{parse_block(idx, ctx).tex}]{{{body}}}"
+            a = Atom(tex, "rad", x0, y0, x1, y1, inner_base(inner, s_), row_size)
+            return combine_rest(a, rest, ctx, row_size)
+        inner = [i for i in g if i is not s_ and i.x0 >= s_.x0]
+        ctx.pen(0.75, "radical without bar")
+        body = parse_block(inner, ctx).tex if inner else ""
+        return Atom(f"\\sqrt{{{body}}}", "rad", x0, y0, x1, y1, inner_base(inner, s_), row_size)
     # big operator with limits above / below
     ops = [i for i in glyphs if i.kind == "bigop"]
     if ops:
@@ -586,12 +625,16 @@ def assemble(atoms, ctx):
         return a.kind not in ("bigop", "limop", "open", "close", "fence", "frac", "stack") and a.size <= 0.86 * msize
 
     atoms = merge_columns(atoms, msize)
+    if atoms and all(level(a) != 0 for a in atoms):
+        levels_zero = True
+    else:
+        levels_zero = False
     out = []  # list of [tex, kind, atom]
     i = 0
     n = len(atoms)
     while i < n:
         a = atoms[i]
-        lv = level(a)
+        lv = 0 if levels_zero else level(a)
         if lv == 0:
             out.append([a.tex, a.kind, a])
             i += 1
