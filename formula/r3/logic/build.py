@@ -198,7 +198,8 @@ ARROWS = {("-", "\\rightarrow"): "\\longrightarrow", ("\\leftarrow", "-"): "\\lo
           ("\\mapsto", "\\rightarrow"): "\\mapsto", ("\\mapsto", "-", "\\rightarrow"): "\\longmapsto",
           ("-", "-", "\\rightarrow"): "\\longrightarrow", ("\\leftarrow", "-", "-"): "\\longleftarrow",
           ("\\hookleftarrow", "\\rightarrow"): "\\hookrightarrow", ("-", "\\rightharpoonup"): "\\rightharpoonup",
-          (":", "="): ":=", ("=", ":"): "=:"}
+          (":", "="): ":=", ("=", ":"): "=:", (",", "\\rightarrow"): "\\hookrightarrow",
+          ("\\leftarrow", ","): "\\hookleftarrow", (",", "-", "\\rightarrow"): "\\hooklongrightarrow"}
 
 
 # ---------------------------------------------------------------- cuts
@@ -358,6 +359,9 @@ def merge_word_limits(groups, size):
         rels = [i for i in g if not i.is_rule and i.kind == "rel" and "arrow" in i.tok and i.size >= 0.9 * size]
         return rels[0] if len(rels) == 1 else None
 
+    def small_below(g, ref):
+        return g and all(i.is_rule or (i.size <= 0.86 * size and i.cy < ref) for i in g)
+
     def word_part(g):
         large = big_letters(g)
         if not large or any(font_role(i.font)[0] != "rm" for i in large):
@@ -372,9 +376,17 @@ def merge_word_limits(groups, size):
     while k < len(out):
         if word_part(out[k]):
             j = k
-            while j + 1 < len(out) and word_part(out[j + 1]) and \
-                    min(i.x0 for i in out[j + 1]) - max(i.x1 for i in big_letters(out[j])) < 0.35 * size:
-                j += 1
+            ref = min(i.base for i in big_letters(out[k]))
+            last_big = max(i.x1 for i in big_letters(out[k]))
+            while True:
+                m = j + 1
+                while m < len(out) and small_below(out[m], ref):
+                    m += 1
+                if m < len(out) and word_part(out[m]) and min(i.x0 for i in big_letters(out[m])) - last_big < 0.35 * size:
+                    j = m
+                    last_big = max(i.x1 for i in big_letters(out[m]))
+                else:
+                    break
             if j > k:
                 parts = out[k:j + 1]
                 word = "".join(i.ch for p in parts for i in sorted(big_letters(p), key=lambda i: i.x0))
@@ -704,6 +716,9 @@ def assemble(atoms, ctx):
     msize = statistics.mode([s for s in sizes if s >= 0.8 * mx])
     bases = [a.base for a in sized if a.base is not None and abs(a.size - msize) <= 0.12 * msize]
     mbase = statistics.median(bases) if bases else statistics.median(a.base for a in sized if a.base is not None) if any(a.base is not None for a in sized) else 0
+    tiny = msize <= 6.5
+    if tiny and atoms[0].base is not None and atoms[0].kind not in ("open", "close", "fence", "stack", "frac"):
+        mbase = atoms[0].base
 
     def level(a):
         if a.kind in ("bigop", "limop") or a.base is None:
@@ -718,6 +733,11 @@ def assemble(atoms, ctx):
         shift = a.base - mbase
         if a.kind == "prime":
             return 1
+        if tiny and not small and a.kind in ("letter", "digit", "ord", "bin", "punct"):
+            if shift < -0.2 * msize:
+                return -1
+            if shift > 0.3 * msize:
+                return 1
         if small and shift > 0.1 * msize:
             if shift < 0.18 * msize:
                 ctx.pen(0.95, "marginal superscript")
@@ -874,7 +894,7 @@ def repair(tex):
     tex = "".join(out) + "}" * depth
     for _ in range(6):
         tex2 = re.sub(r"\\(mathtt|mathsf|mathrm)\{([^{}]*)\}\s*\\\1\{([^{}]*)\}", r"\\\1{\2\3}", tex)
-        tex2 = re.sub(r"\\mathbb\{([A-Z]+)\}\s*\\mathbb\{([A-Z])\}", r"\\mathbb{\1\2}", tex2)
+        tex2 = re.sub(r"\\(mathbb|mathcal)\{([A-Z]+)\}\s*\\\1\{([A-Z])\}", r"\\\1{\2\3}", tex2)
         if tex2 == tex:
             break
         tex = tex2
