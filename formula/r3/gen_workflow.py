@@ -40,19 +40,24 @@ on:
       mode:
         description: "probe (prep, Test 1 tools and logic, CDM verification), logic (logic rebuild only), full (everything)"
         type: choice
-        options: [probe, logic, full]
+        options: [probe, logic, models, final, full]
         default: probe
+      from_runs:
+        description: "final mode: comma-separated earlier run ids whose acc/t2 artifacts are reused"
+        type: string
+        default: ""
   push:
     paths:
       - "formula/**"
       - ".github/workflows/formula.yml"
 
 concurrency:
-  group: formula-${{{{ github.ref }}}}-${{{{ inputs.mode || 'probe' }}}}
+  group: formula-${{{{ github.ref }}}}-${{{{ inputs.mode || 'probe' }}}}-${{{{ inputs.from_runs }}}}
   cancel-in-progress: true
 
 permissions:
   contents: read
+  actions: read
 
 env:
   MONKEY_REPO: /tmp/MonkeyOCRv2/formula
@@ -91,7 +96,7 @@ jobs:
       - run: python scripts/counts.py; du -sh data data/arxiv; ls data/arxiv | wc -l
 
   prep-models:
-    if: ${{{{ {MODE} == 'full' }}}}
+    if: ${{{{ {MODE} == 'full' || {MODE} == 'models' }}}}
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     defaults: {{ run: {{ working-directory: formula }} }}
@@ -111,7 +116,7 @@ jobs:
       - run: cat models/variants_status.json; du -sh models/*
 
   prep-ref:
-    if: ${{{{ {MODE} == 'full' }}}}
+    if: ${{{{ {MODE} == 'full' || {MODE} == 'models' }}}}
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     defaults: {{ run: {{ working-directory: formula }} }}
@@ -129,7 +134,7 @@ jobs:
       - run: du -sh models_ref/*
 
   prep-monkey:
-    if: ${{{{ {MODE} == 'full' }}}}
+    if: ${{{{ {MODE} == 'full' || {MODE} == 'models' }}}}
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     defaults: {{ run: {{ working-directory: formula }} }}
@@ -148,7 +153,7 @@ jobs:
       - run: cat models_monkey/monkey_info.json; du -sh models_monkey/*
 
   prep-tools:
-    if: ${{{{ {MODE} != 'logic' }}}}
+    if: ${{{{ {MODE} == 'probe' || {MODE} == 'final' || {MODE} == 'full' }}}}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -174,6 +179,7 @@ jobs:
           retention-days: 14
 
   t1-logic:
+    if: ${{{{ {MODE} != 'models' }}}}
     needs: prep-data
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -196,7 +202,7 @@ jobs:
           retention-days: 21
 
   t1-tools:
-    if: ${{{{ {MODE} != 'logic' }}}}
+    if: ${{{{ {MODE} == 'probe' || {MODE} == 'final' || {MODE} == 'full' }}}}
     needs: [prep-data, prep-tools]
     runs-on: ubuntu-24.04
     timeout-minutes: 90
@@ -237,7 +243,7 @@ jobs:
           retention-days: 21
 
   cdm-verify:
-    if: ${{{{ {MODE} != 'logic' }}}}
+    if: ${{{{ {MODE} == 'probe' || {MODE} == 'final' || {MODE} == 'full' }}}}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     defaults: {{ run: {{ shell: bash, working-directory: formula/r3/cdm }} }}
@@ -256,7 +262,7 @@ jobs:
           {{ echo '## CDM verification'; echo '```'; cat out/example_check.txt out/own_check.txt; echo '```'; }} >> "$GITHUB_STEP_SUMMARY"
 
   plan:
-    if: ${{{{ {MODE} == 'full' }}}}
+    if: ${{{{ {MODE} == 'full' || {MODE} == 'models' || {MODE} == 'final' }}}}
     runs-on: ubuntu-24.04
     outputs:
       acc: ${{{{ steps.p.outputs.acc }}}}
@@ -269,6 +275,7 @@ jobs:
           echo "cdm=$(python3 formula/r3/plan_r3.py cdm)" >> "$GITHUB_OUTPUT"
 
   acc:
+    if: ${{{{ {MODE} == 'full' || {MODE} == 'models' }}}}
     needs: [plan, prep-data, prep-models, prep-ref, prep-monkey]
     runs-on: ubuntu-24.04
     timeout-minutes: 130
@@ -299,7 +306,7 @@ jobs:
           retention-days: 21
 
   t2-dec:
-    if: ${{{{ {MODE} == 'full' }}}}
+    if: ${{{{ {MODE} == 'full' || {MODE} == 'models' }}}}
     needs: [prep-data, prep-models]
     runs-on: ubuntu-24.04
     timeout-minutes: 130
@@ -324,7 +331,7 @@ jobs:
           retention-days: 21
 
   t2-split:
-    if: ${{{{ {MODE} == 'full' }}}}
+    if: ${{{{ {MODE} == 'full' || {MODE} == 'models' }}}}
     needs: [prep-data, prep-models]
     runs-on: ubuntu-24.04
     timeout-minutes: 130
@@ -350,7 +357,7 @@ jobs:
 
   cdm:
     needs: [plan, acc, t1-logic, t1-tools, t2-dec, t2-split, cdm-verify]
-    if: ${{{{ !cancelled() && needs.plan.result == 'success' && needs.cdm-verify.result == 'success' }}}}
+    if: ${{{{ !cancelled() && needs.plan.result == 'success' && needs.cdm-verify.result == 'success' && ({MODE} == 'full' || {MODE} == 'final') }}}}
     runs-on: ubuntu-24.04
     timeout-minutes: 130
     strategy:
@@ -367,6 +374,19 @@ jobs:
         with: {{ pattern: "t1-*", merge-multiple: true, path: formula/results/t1 }}
       - uses: actions/download-artifact@v4
         with: {{ pattern: "t2*", merge-multiple: true, path: formula/results/t2 }}
+      - name: Reuse artifacts of earlier runs
+        if: ${{{{ inputs.from_runs != '' }}}}
+        env:
+          GH_TOKEN: ${{{{ github.token }}}}
+        run: |
+          for id in $(echo "${{{{ inputs.from_runs }}}}" | tr ',' ' '); do
+            for kind in acc t2; do
+              mkdir -p /tmp/prev/$id/$kind formula/results/$kind
+              gh run download $id -R ${{{{ github.repository }}}} -p "$kind*" -D /tmp/prev/$id/$kind || true
+              find /tmp/prev/$id/$kind -name '*.jsonl' -exec cp -n {{}} formula/results/$kind/ \;
+            done
+          done
+          ls formula/results/acc | wc -l; ls formula/results/t2 | wc -l
       - name: CDM for ${{{{ matrix.system }}}} shard ${{{{ matrix.shard }}}}
         run: |
           mkdir -p formula/results/cdm
@@ -398,6 +418,19 @@ jobs:
         with: {{ pattern: "t2*", merge-multiple: true, path: formula/results/t2 }}
       - uses: actions/download-artifact@v4
         with: {{ pattern: "cdm-*", merge-multiple: true, path: formula/results/cdm }}
+      - name: Reuse artifacts of earlier runs
+        if: ${{{{ inputs.from_runs != '' }}}}
+        env:
+          GH_TOKEN: ${{{{ github.token }}}}
+        run: |
+          for id in $(echo "${{{{ inputs.from_runs }}}}" | tr ',' ' '); do
+            for kind in acc t2; do
+              mkdir -p /tmp/prev/$id/$kind results/$kind
+              gh run download $id -R ${{{{ github.repository }}}} -p "$kind*" -D /tmp/prev/$id/$kind || true
+              find /tmp/prev/$id/$kind -name '*.jsonl' -exec cp -n {{}} results/$kind/ \;
+            done
+          done
+          ls results/acc | wc -l; ls results/t2 | wc -l
       - run: |
           python r3/eval_r3.py > /dev/null
           cat results/report_r3.md >> "$GITHUB_STEP_SUMMARY"
