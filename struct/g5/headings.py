@@ -130,6 +130,8 @@ def repair(path, items, use_outline=True, reject=True, use_toc=True):
     src = {}
     if ol:
         for e in ol:
+            if e["page"] is None or e["page"] < 0:
+                continue
             best, bk = 0.0, None
             for k, it in enumerate(items):
                 if it["label"] not in TEXT_LABELS or it["furniture"] or not it["page"] or len(it["text"].split()) > 20:
