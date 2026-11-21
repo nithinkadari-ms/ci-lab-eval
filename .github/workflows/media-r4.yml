@@ -28,9 +28,6 @@ env:
   PYTHONUNBUFFERED: "1"
   HF_HUB_DISABLE_PROGRESS_BARS: "1"
   OMP_NUM_THREADS: "1"
-  MODELS_KEY: media-models-v1-${{ hashFiles('media/fetch.py') }}
-  FORMS_KEY: media-forms-v1-${{ hashFiles('media/forms/gen_forms.py', 'media/ocr/data.py', 'media/fetch.py') }}
-  CHARTS_KEY: media-charts-v1-${{ hashFiles('media/charts/gen_vector.py', 'media/charts/datasets.py', 'media/fetch.py') }}
 
 jobs:
   prep-ocr:
@@ -44,7 +41,7 @@ jobs:
       - run: pip install -r media/requirements.txt
       - id: m
         uses: actions/cache@v4
-        with: { path: /home/runner/media-models, key: "${{ env.MODELS_KEY }}" }
+        with: { path: /home/runner/media-models, key: "media-models-v1-${{ hashFiles('media/fetch.py') }}" }
       - if: steps.m.outputs.cache-hit != 'true'
         run: python media/fetch.py ocr_models && python media/fetch.py forms_models
       - id: d
@@ -63,7 +60,7 @@ jobs:
           path: |
             /home/runner/media-data/forms_gen
             /home/runner/media-data/signverod
-          key: ${{ env.FORMS_KEY }}
+          key: "media-forms-v1-${{ hashFiles('media/forms/gen_forms.py', 'media/ocr/data.py', 'media/fetch.py') }}"
       - if: steps.f.outputs.cache-hit != 'true'
         run: python media/fetch.py forms_data && python media/forms/gen_forms.py /home/runner/media-data/forms_gen 200
       - run: |
@@ -88,7 +85,7 @@ jobs:
           path: |
             /home/runner/media-data/charts
             /home/runner/media-data/chartx
-          key: ${{ env.CHARTS_KEY }}
+          key: "media-charts-v1-${{ hashFiles('media/charts/gen_vector.py', 'media/charts/datasets.py', 'media/fetch.py') }}"
       - if: steps.c.outputs.cache-hit != 'true'
         run: |
           python media/fetch.py chart_data
@@ -119,7 +116,7 @@ jobs:
           pip install onnxtr==0.9.0
           pip install --no-binary tesserocr tesserocr==2.13.0 || echo "tesserocr build failed: pytesseract is used"
       - uses: actions/cache/restore@v4
-        with: { path: /home/runner/media-models, key: "${{ env.MODELS_KEY }}", fail-on-cache-miss: true }
+        with: { path: /home/runner/media-models, key: "media-models-v1-${{ hashFiles('media/fetch.py') }}", fail-on-cache-miss: true }
       - uses: actions/cache/restore@v4
         with:
           path: |
@@ -155,7 +152,7 @@ jobs:
           pip install onnxtr==0.9.0
           pip install --no-binary tesserocr tesserocr==2.13.0 || echo "tesserocr build failed: pytesseract is used"
       - uses: actions/cache/restore@v4
-        with: { path: /home/runner/media-models, key: "${{ env.MODELS_KEY }}", fail-on-cache-miss: true }
+        with: { path: /home/runner/media-models, key: "media-models-v1-${{ hashFiles('media/fetch.py') }}", fail-on-cache-miss: true }
       - uses: actions/cache/restore@v4
         with:
           path: |
@@ -185,13 +182,13 @@ jobs:
         with: { python-version: "3.11", cache: pip, cache-dependency-path: "media/requirements*.txt" }
       - run: pip install -r media/requirements.txt
       - uses: actions/cache/restore@v4
-        with: { path: /home/runner/media-models, key: "${{ env.MODELS_KEY }}", fail-on-cache-miss: true }
+        with: { path: /home/runner/media-models, key: "media-models-v1-${{ hashFiles('media/fetch.py') }}", fail-on-cache-miss: true }
       - uses: actions/cache/restore@v4
         with:
           path: |
             /home/runner/media-data/charts
             /home/runner/media-data/chartx
-          key: ${{ env.CHARTS_KEY }}
+          key: "media-charts-v1-${{ hashFiles('media/charts/gen_vector.py', 'media/charts/datasets.py', 'media/fetch.py') }}"
           fail-on-cache-miss: true
       - run: mkdir -p out && python media/charts/run_charts.py ours ${{ matrix.shard }} 3 out/charts-ours-${{ matrix.shard }}.jsonl
       - uses: actions/upload-artifact@v4
@@ -227,7 +224,7 @@ jobs:
           path: |
             /home/runner/media-data/forms_gen
             /home/runner/media-data/signverod
-          key: ${{ env.FORMS_KEY }}
+          key: "media-forms-v1-${{ hashFiles('media/forms/gen_forms.py', 'media/ocr/data.py', 'media/fetch.py') }}"
           fail-on-cache-miss: true
       - run: mkdir -p out && python media/forms/run_ffdetr.py out
       - uses: actions/upload-artifact@v4
@@ -259,7 +256,7 @@ jobs:
           path: |
             /home/runner/media-data/charts
             /home/runner/media-data/chartx
-          key: ${{ env.CHARTS_KEY }}
+          key: "media-charts-v1-${{ hashFiles('media/charts/gen_vector.py', 'media/charts/datasets.py', 'media/fetch.py') }}"
           fail-on-cache-miss: true
       - run: mkdir -p out && python media/charts/run_charts.py deplot ${{ matrix.shard }} 5 out/charts-deplot-${{ matrix.shard }}.jsonl
       - uses: actions/upload-artifact@v4
@@ -282,7 +279,7 @@ jobs:
           pip install torch==2.15.0 --index-url https://download.pytorch.org/whl/cpu
           pip install -r media/requirements-torch.txt
       - uses: actions/cache/restore@v4
-        with: { path: /home/runner/media-models, key: "${{ env.MODELS_KEY }}", fail-on-cache-miss: true }
+        with: { path: /home/runner/media-models, key: "media-models-v1-${{ hashFiles('media/fetch.py') }}", fail-on-cache-miss: true }
       - uses: actions/cache/restore@v4
         with:
           path: |
@@ -296,7 +293,7 @@ jobs:
           path: |
             /home/runner/media-data/forms_gen
             /home/runner/media-data/signverod
-          key: ${{ env.FORMS_KEY }}
+          key: "media-forms-v1-${{ hashFiles('media/forms/gen_forms.py', 'media/ocr/data.py', 'media/fetch.py') }}"
           fail-on-cache-miss: true
       - uses: actions/download-artifact@v4
         continue-on-error: true
@@ -352,7 +349,7 @@ jobs:
           pip install onnxtr==0.9.0
           pip install --no-binary tesserocr tesserocr==2.13.0 || echo "tesserocr build failed: pytesseract is used"
       - uses: actions/cache/restore@v4
-        with: { path: /home/runner/media-models, key: "${{ env.MODELS_KEY }}", fail-on-cache-miss: true }
+        with: { path: /home/runner/media-models, key: "media-models-v1-${{ hashFiles('media/fetch.py') }}", fail-on-cache-miss: true }
       - uses: actions/cache/restore@v4
         with:
           path: |
