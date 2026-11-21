@@ -32,6 +32,7 @@ def score(gold, pred, rep_keys=frozenset(), ignore=False, thr=0.8):
         m0 = min(lv)
         lv = [x - m0 + 1 for x in lv]
     ppar = parents(lv)
+    raw = list(lv)
     match = [None] * len(pred)
     used = set()
     for gi, g in enumerate(gold):
@@ -47,10 +48,12 @@ def score(gold, pred, rep_keys=frozenset(), ignore=False, thr=0.8):
             match[bj] = gi
     tp = sum(1 for m in match if m is not None)
     lvl_ok = edge = 0
+    mm = [raw[pj] for pj, gi in enumerate(match) if gi is not None]
+    off = (min(mm) - 1) if mm else 0
     for pj, gi in enumerate(match):
         if gi is None:
             continue
-        lvl_ok += lv[pj] == gdep[gi]
+        lvl_ok += raw[pj] - off == gdep[gi]
         pp = ppar[pj]
         gp = gpar[gi]
         if (pp < 0 and gp < 0) or (pp >= 0 and match[pp] is not None and match[pp] == gp):
@@ -66,6 +69,25 @@ def score(gold, pred, rep_keys=frozenset(), ignore=False, thr=0.8):
             else:
                 foth += 1
     return dict(tp=tp, np=len(pred), ng=len(gold), lvl_ok=lvl_ok, edge=edge, f_cap=fcap, f_rep=frep, f_oth=foth)
+
+
+def hrdoc_tree(entries):
+    nodes, where = [], {}
+    for i, e in enumerate(entries):
+        rel, p = e.get("relation", "contain"), e.get("parent", -1)
+        if rel == "connect" and p in where:
+            nodes[where[p]]["text"] += " " + e["text"]
+            where[i] = where[p]
+            continue
+        if p is None or p < 0 or p not in where:
+            par = -1
+        elif rel == "equality":
+            par = nodes[where[p]]["parent"]
+        else:
+            par = where[p]
+        nodes.append(dict(text=e["text"], parent=par))
+        where[i] = len(nodes) - 1
+    return nodes
 
 
 def outline_gold(ol):

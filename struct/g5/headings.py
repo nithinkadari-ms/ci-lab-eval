@@ -14,6 +14,7 @@ CAPTION = re.compile(r"^\s*(fig(ure)?s?|table|tab|algorithm|listing|scheme|chart
 STRIP = re.compile(r"^\s*((\d+|[ivxlc]+|[a-z])(\.\d+)*[\.\)]?|\(?[a-z0-9]+\))\s+", re.I)
 TOCLINE = re.compile(r"^(.*?\S)\s*(?:[\.·… ]{2,}|\s{2,}|\t)\s*(\d{1,4})\s*$")
 TEXT_LABELS = ("text", "list_item", "section_header", "paragraph")
+SECTION_WORDS = re.compile(r"^(abstract|summary|introduction|background|keywords?)")
 
 
 def key(s):
@@ -64,6 +65,7 @@ def styles(path, items):
             it["bold"] = sum(1 for c in sel if c.get("weight", 400) >= 600 or "bold" in c.get("font", "").lower() or "black" in c.get("font", "").lower()) / len(sel)
             al = [c["c"] for c in sel if c["c"].isalpha()]
             it["caps"] = sum(1 for c in al if c.isupper()) / len(al) if al else 0.0
+            it["italic"] = sum(1 for c in sel if (c.get("fflags", 0) & 0x40) or "italic" in c.get("font", "").lower() or "oblique" in c.get("font", "").lower()) / len(sel)
             it["ph"] = geo.h
             it["nchars"] = len(sel)
 
@@ -88,6 +90,10 @@ def toc_entries(path):
         m = NUM.match(e["title"])
         e["level"] = m.group(1).count(".") + 1 if m else xs.index(round(e["x"] / 8)) + 1
     return out
+
+
+def tier(it):
+    return (it.get("size", 0.0), round(it.get("bold", 0.0)), 1 if it.get("caps", 0.0) >= 0.8 else 0, round(it.get("italic", 0.0)))
 
 
 def repeated(items):
@@ -126,7 +132,7 @@ def repair(path, items, use_outline=True, reject=True, use_toc=True):
         for e in ol:
             best, bk = 0.0, None
             for k, it in enumerate(items):
-                if it["label"] not in TEXT_LABELS or it["furniture"] or not it["page"]:
+                if it["label"] not in TEXT_LABELS or it["furniture"] or not it["page"] or len(it["text"].split()) > 20:
                     continue
                 if abs((it["page"] - 1) - e["page"]) > 1:
                     continue
@@ -148,6 +154,10 @@ def repair(path, items, use_outline=True, reject=True, use_toc=True):
             if bk is not None and best >= 0.85 and bk not in level:
                 level[bk] = e["level"]
                 src[bk] = "toc"
+    front = None
+    for it in items:
+        if it["page"] == 1 and it["label"] == "text" and it["bbox"] and len(it["text"].split()) >= 30 and not it["furniture"]:
+            front = it["bbox"][1] if front is None else min(front, it["bbox"][1])
     keep = []
     for k in sorted(set(cands)):
         it = items[k]
@@ -155,7 +165,10 @@ def repair(path, items, use_outline=True, reject=True, use_toc=True):
         if reject and k not in level:
             if CAPTION.match(t) or TOCLINE.match(t):
                 continue
-            if re.sub(r"\d+", "", key(t)) in rep:
+            numbered = bool(NUM.match(t) or ROMAN_H.match(t))
+            if not numbered and re.sub(r"\d+", "", key(t)) in rep:
+                continue
+            if not numbered and front is not None and it["page"] == 1 and it["bbox"] and it["bbox"][3] <= front and not SECTION_WORDS.match(key(t)):
                 continue
             ph = it.get("ph") or 792.0
             if it["bbox"] and (it["bbox"][3] < 0.06 * ph or it["bbox"][1] > 0.94 * ph):
@@ -176,9 +189,8 @@ def repair(path, items, use_outline=True, reject=True, use_toc=True):
     tiers = {}
     for k in keep:
         it = items[k]
-        tk = (it.get("size", 0.0), round(it.get("bold", 0.0)))
-        tiers.setdefault(tk, []).append(k)
-    order = sorted(tiers, key=lambda x: (-x[0], -x[1]))
+        tiers.setdefault(tier(it), []).append(k)
+    order = sorted(tiers, key=lambda x: (-x[0], -x[1], -x[2], x[3]))
     tier_level = {}
     for tk in order:
         ev = [level[k] for k in tiers[tk] if k in level]
@@ -194,7 +206,6 @@ def repair(path, items, use_outline=True, reject=True, use_toc=True):
     out = []
     for k in keep:
         it = items[k]
-        tk = (it.get("size", 0.0), round(it.get("bold", 0.0)))
-        lv = level.get(k, tier_level.get(tk, 1))
+        lv = level.get(k, tier_level.get(tier(it), 1))
         out.append(dict(k=k, text=it["text"], level=max(1, lv), src=src.get(k, "style")))
     return out

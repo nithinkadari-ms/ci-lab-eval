@@ -104,7 +104,7 @@ def summarize():
         groups = {}
         for r in cr:
             groups.setdefault(r["gold"]["group"], {})[r["gold"]["pdf_role"]] = r
-        fam, reg, ben, conf = {}, {}, [], {}
+        fam, reg, ben, conf, exs = {}, {}, [], {}, []
         empty = 0
         for g, roles in groups.items():
             inj, org = roles.get("injected_attack"), roles.get("benign_original")
@@ -115,7 +115,8 @@ def summarize():
                     toks = sum(len(dl.tokens(s["text"])) for s in sp)
                     ht = sum(len(dl.tokens(s["text"])) for s in sp if s["hidden"])
                     x = dict(anyf=any(s["hidden"] for s in sp), toks=toks, ht=ht)
-                    ben.append(x)
+                    if role == "benign_original":
+                        ben.append(x)
                     if role == "benign_confounder":
                         conf.setdefault(b["gold"].get("benign_confounder_family", "?"), []).append(x)
             if not inj or not org:
@@ -128,6 +129,8 @@ def summarize():
             D = Counter(dl.tokens(inj.get("dl", {}).get("text", ""))) - Counter(dl.tokens(org.get("dl", {}).get("text", "")))
             Fd = Counter(vis.filtered_tokens(inj["vis"])) - Counter(vis.filtered_tokens(org["vis"]))
             x = dict(rec=msum(G & H) / msum(G), dl=msum(G & D) / msum(G), filt=msum(G & Fd) / msum(G))
+            if len(exs) < 8:
+                exs.append((inj["gold"].get("attack_family"), " ".join(list(G.elements())[:8]), round(x["rec"], 2), round(x["dl"], 2)))
             fam.setdefault(inj["gold"].get("attack_family", "?"), []).append(x)
             reg.setdefault(inj["gold"].get("rendering_regime", "?"), []).append(x)
         md.append("### CrackedPDFs (MIT, HF revision 02d7e0b; paper test split, up to 40 triads per attack family)")
@@ -147,7 +150,10 @@ def summarize():
         if allx:
             summ["cracked_recall"] = sum(x["rec"] for x in allx) / len(allx)
             summ["cracked_dl_reach"] = sum(x["dl"] for x in allx) / len(allx)
-        md.append("Benign false flags: %d benign PDFs, flagged docs %s, flagged tokens %s." % (
+        if exs:
+            md.append("Injected-token examples (family, first tokens, hidden recall, docling-rs reach): " + "; ".join("%s: `%s` %s/%s" % e for e in exs) + ".")
+            md.append("")
+        md.append("False flags on benign originals (no hidden content by construction): %d PDFs, flagged docs %s, flagged tokens %s. Benign confounders below carry deliberately hidden or low-visibility benign content, so visibility flags there are expected; the table shows how often they are flagged." % (
             len(ben), S.fmt(S.ratio(sum(x["anyf"] for x in ben), len(ben))), S.fmt(S.ratio(sum(x["ht"] for x in ben), sum(x["toks"] for x in ben)), 4)))
         md.append("")
         if conf:

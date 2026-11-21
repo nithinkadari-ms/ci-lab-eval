@@ -154,11 +154,23 @@ class Router:
                 if o is None:
                     w["flag"] = True
                 elif o != dl.norm(w["text"]):
-                    if replace:
+                    rep = replace(w, o) if callable(replace) else replace
+                    if rep and any(c.isalnum() for c in o) and any(c.isalnum() for c in w["text"]):
                         w["out"], w["src"] = o, "ocr"
                     else:
                         w["flag"] = True
             return pairs
+
+        def garbage(w):
+            return any(0xE000 <= ord(c) <= 0xF8FF or ord(c) == 0xFFFD or ord(c) < 32 for c in w["text"])
+
+        def trig_replace(w, o):
+            if garbage(w) or anomalous(w["text"]):
+                return True
+            if self.nonword(w):
+                t = o.strip(".,;:()[]\"'")
+                return t.lower() in self.lex
+            return False
 
         for p in pages:
             if p["mode"] != "layer":
@@ -196,7 +208,7 @@ class Router:
             p["trig_lines"] = len(trig)
             read(p, trig)
             for L in trig:
-                apply(L, sel=self.suspicious)
+                apply(L, sel=self.suspicious, replace=trig_replace)
         fonts = {}
         for p in dig:
             for L in p["lines"]:

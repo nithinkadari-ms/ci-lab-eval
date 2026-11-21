@@ -27,7 +27,7 @@ def main():
                 did = os.path.basename(n)[:-5]
                 d = json.loads(z.read(n).decode("utf-8"))
                 gold[did] = d
-                classes.update(x.get("class") for x in d)
+                classes.update((x.get("class"), x.get("relation")) for x in d)
         for n in names:
             if n.lower().endswith("hrdh_msra_pod_test/readme.md"):
                 cfg.log(z.read(n).decode("utf-8", "replace")[:3000])
@@ -40,7 +40,7 @@ def main():
         if net.download("https://export.arxiv.org/pdf/" + did, dest, delay=3.5) and net.is_pdf(dest):
             heads = []
             for x in gold[did]:
-                heads.append(dict(text=x.get("text", ""), parent=x.get("parent_id", -1), page=x.get("page"), cls=x.get("class")))
+                heads.append(dict(text=x.get("text", ""), parent=x.get("parent_id", -1), relation=x.get("relation", "contain"), page=x.get("page"), cls=x.get("class")))
             man.append(dict(id="chrd_" + did, set="comphrdoc", pdf=os.path.join("g5", "pdf", did + ".pdf"), gold=heads, arxiv=did))
         elif os.path.exists(dest):
             os.remove(dest)

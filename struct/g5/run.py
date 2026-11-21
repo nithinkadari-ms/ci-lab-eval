@@ -51,7 +51,7 @@ def main():
             if d["set"] == "pmc_jats":
                 gold = jats.sections(jats.root_of(open(d["xml"], "rb").read()))
             else:
-                gold = d["gold"]
+                gold = M.hrdoc_tree(d["gold"])
             ol = HD.outline(d["pdf"])
             r["outline_n"] = len(ol)
             golds = {"main": gold}

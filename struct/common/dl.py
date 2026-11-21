@@ -70,6 +70,8 @@ def items(doc):
                 if pr:
                     rec["page"] = pr[0]["page_no"]
                     rec["bbox"] = _topleft(pr[0]["bbox"], ph(pr[0]["page_no"]))
+                if lab == "list_item" and it.get("marker"):
+                    rec["text"] = (it["marker"] + " " + rec["text"]).strip()
                 if kind == "tables":
                     cells = ((it.get("data") or {}).get("table_cells")) or []
                     rec["text"] = " ".join(c.get("text") or "" for c in cells)
