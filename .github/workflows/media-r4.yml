@@ -1,0 +1,390 @@
+name: media-r4
+
+# Round 4: OCR (gap 1), charts (gap 2), forms + FFDetr (gap 3), Word formulas (gap 11).
+# Stages are chained so that no more than 8 jobs of this workflow run at once.
+on:
+  workflow_dispatch:
+    inputs:
+      n_synth_ocr:
+        description: "synthetic base documents for OCR (x8 degradations)"
+        default: "240"
+      n_odb:
+        description: "OmniDocBench English text regions"
+        default: "4000"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: media-r4-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  MEDIA_DATA: /home/runner/media-data
+  MEDIA_MODELS: /home/runner/media-models
+  OCR_N_SYNTH: ${{ inputs.n_synth_ocr || '240' }}
+  OCR_N_ODB: ${{ inputs.n_odb || '4000' }}
+  PYTHONUNBUFFERED: "1"
+  HF_HUB_DISABLE_PROGRESS_BARS: "1"
+  OMP_NUM_THREADS: "1"
+  MODELS_KEY: media-models-v1-${{ hashFiles('media/fetch.py') }}
+  FORMS_KEY: media-forms-v1-${{ hashFiles('media/forms/gen_forms.py', 'media/ocr/data.py', 'media/fetch.py') }}
+  CHARTS_KEY: media-charts-v1-${{ hashFiles('media/charts/gen_vector.py', 'media/charts/datasets.py', 'media/fetch.py') }}
+
+jobs:
+  prep-ocr:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11", cache: pip, cache-dependency-path: "media/requirements*.txt" }
+      - run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends fonts-liberation fonts-dejavu-core
+      - run: pip install -r media/requirements.txt
+      - id: m
+        uses: actions/cache@v4
+        with: { path: /home/runner/media-models, key: "${{ env.MODELS_KEY }}" }
+      - if: steps.m.outputs.cache-hit != 'true'
+        run: python media/fetch.py ocr_models && python media/fetch.py forms_models
+      - id: d
+        uses: actions/cache@v4
+        with:
+          path: |
+            /home/runner/media-data/funsd
+            /home/runner/media-data/sroie
+            /home/runner/media-data/odb
+          key: media-ocr-data-v1
+      - if: steps.d.outputs.cache-hit != 'true'
+        run: python media/fetch.py ocr_data
+      - id: f
+        uses: actions/cache@v4
+        with:
+          path: |
+            /home/runner/media-data/forms_gen
+            /home/runner/media-data/signverod
+          key: ${{ env.FORMS_KEY }}
+      - if: steps.f.outputs.cache-hit != 'true'
+        run: python media/fetch.py forms_data && python media/forms/gen_forms.py /home/runner/media-data/forms_gen 200
+      - run: |
+          mkdir -p out
+          python media/fetch.py verify out/verify.json
+          python media/ocr/data.py
+          du -sh /home/runner/media-models /home/runner/media-data/*
+      - uses: actions/upload-artifact@v4
+        with: { name: verify, path: out/ }
+
+  prep-charts:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11", cache: pip, cache-dependency-path: "media/requirements*.txt" }
+      - run: pip install -r media/requirements.txt
+      - id: c
+        uses: actions/cache@v4
+        with:
+          path: |
+            /home/runner/media-data/charts
+            /home/runner/media-data/chartx
+          key: ${{ env.CHARTS_KEY }}
+      - if: steps.c.outputs.cache-hit != 'true'
+        run: |
+          python media/fetch.py chart_data
+          python media/charts/datasets.py prep 600 1000
+          rm -rf /home/runner/media-data/plotqa
+      - run: du -sh /home/runner/media-data/*
+
+  ocr-pages:
+    needs: [prep-ocr, prep-charts]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      max-parallel: 8
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11", cache: pip, cache-dependency-path: "media/requirements*.txt" }
+      - name: system packages (Tesseract 5 from apt, fonts for the synthetic pages)
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends tesseract-ocr libtesseract-dev libleptonica-dev pkg-config fonts-liberation fonts-dejavu-core
+          tesseract --version
+      - run: |
+          pip install -r media/requirements.txt
+          pip install onnxtr==0.9.0
+          pip install --no-binary tesserocr tesserocr==2.13.0 || echo "tesserocr build failed: pytesseract is used"
+      - uses: actions/cache/restore@v4
+        with: { path: /home/runner/media-models, key: "${{ env.MODELS_KEY }}", fail-on-cache-miss: true }
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            /home/runner/media-data/funsd
+            /home/runner/media-data/sroie
+            /home/runner/media-data/odb
+          key: media-ocr-data-v1
+          fail-on-cache-miss: true
+      - run: mkdir -p out && python media/ocr/run_ocr.py pages ${{ matrix.shard }} 14 out/ocr-pages-${{ matrix.shard }}.jsonl 4
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: "ocr-pages-${{ matrix.shard }}", path: out/ }
+
+  ocr-regions:
+    needs: [ocr-pages]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        shard: [0, 1, 2, 3]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11", cache: pip, cache-dependency-path: "media/requirements*.txt" }
+      - run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends tesseract-ocr libtesseract-dev libleptonica-dev pkg-config fonts-liberation fonts-dejavu-core
+      - run: |
+          pip install -r media/requirements.txt
+          pip install onnxtr==0.9.0
+          pip install --no-binary tesserocr tesserocr==2.13.0 || echo "tesserocr build failed: pytesseract is used"
+      - uses: actions/cache/restore@v4
+        with: { path: /home/runner/media-models, key: "${{ env.MODELS_KEY }}", fail-on-cache-miss: true }
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            /home/runner/media-data/funsd
+            /home/runner/media-data/sroie
+            /home/runner/media-data/odb
+          key: media-ocr-data-v1
+          fail-on-cache-miss: true
+      - run: mkdir -p out && python media/ocr/run_ocr.py regions ${{ matrix.shard }} 4 out/ocr-regions-${{ matrix.shard }}.jsonl 4
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: "ocr-regions-${{ matrix.shard }}", path: out/ }
+
+  charts:
+    needs: [ocr-pages]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        shard: [0, 1, 2]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11", cache: pip, cache-dependency-path: "media/requirements*.txt" }
+      - run: pip install -r media/requirements.txt
+      - uses: actions/cache/restore@v4
+        with: { path: /home/runner/media-models, key: "${{ env.MODELS_KEY }}", fail-on-cache-miss: true }
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            /home/runner/media-data/charts
+            /home/runner/media-data/chartx
+          key: ${{ env.CHARTS_KEY }}
+          fail-on-cache-miss: true
+      - run: mkdir -p out && python media/charts/run_charts.py ours ${{ matrix.shard }} 3 out/charts-ours-${{ matrix.shard }}.jsonl
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: "charts-ours-${{ matrix.shard }}", path: out/ }
+
+  ffdetr:
+    needs: [ocr-pages]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    env:
+      OMP_NUM_THREADS: "4"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11", cache: pip, cache-dependency-path: "media/requirements*.txt" }
+      - run: |
+          pip install -r media/requirements.txt
+          pip install torch==2.15.0 torchvision==0.29.2 --index-url https://download.pytorch.org/whl/cpu
+          pip install rfdetr==1.12.1
+          pip list 2>/dev/null | grep -i -E "^(torch|torchvision|rfdetr|transformers|supervision|huggingface)" || true
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            /home/runner/media-data/funsd
+            /home/runner/media-data/sroie
+            /home/runner/media-data/odb
+          key: media-ocr-data-v1
+          fail-on-cache-miss: true
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            /home/runner/media-data/forms_gen
+            /home/runner/media-data/signverod
+          key: ${{ env.FORMS_KEY }}
+          fail-on-cache-miss: true
+      - run: mkdir -p out && python media/forms/run_ffdetr.py out
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: forms-ffdetr, path: out/ }
+
+  deplot:
+    needs: [ocr-regions, charts, ffdetr]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    env:
+      OMP_NUM_THREADS: "4"
+    strategy:
+      fail-fast: false
+      max-parallel: 5
+      matrix:
+        shard: [0, 1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11", cache: pip, cache-dependency-path: "media/requirements*.txt" }
+      - run: |
+          pip install -r media/requirements.txt
+          pip install torch==2.15.0 --index-url https://download.pytorch.org/whl/cpu
+          pip install -r media/requirements-torch.txt
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            /home/runner/media-data/charts
+            /home/runner/media-data/chartx
+          key: ${{ env.CHARTS_KEY }}
+          fail-on-cache-miss: true
+      - run: mkdir -p out && python media/charts/run_charts.py deplot ${{ matrix.shard }} 5 out/charts-deplot-${{ matrix.shard }}.jsonl
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: "charts-deplot-${{ matrix.shard }}", path: out/ }
+
+  forms:
+    needs: [ocr-regions, charts, ffdetr]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      OMP_NUM_THREADS: "4"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11", cache: pip, cache-dependency-path: "media/requirements*.txt" }
+      - run: |
+          pip install -r media/requirements.txt
+          pip install torch==2.15.0 --index-url https://download.pytorch.org/whl/cpu
+          pip install -r media/requirements-torch.txt
+      - uses: actions/cache/restore@v4
+        with: { path: /home/runner/media-models, key: "${{ env.MODELS_KEY }}", fail-on-cache-miss: true }
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            /home/runner/media-data/funsd
+            /home/runner/media-data/sroie
+            /home/runner/media-data/odb
+          key: media-ocr-data-v1
+          fail-on-cache-miss: true
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            /home/runner/media-data/forms_gen
+            /home/runner/media-data/signverod
+          key: ${{ env.FORMS_KEY }}
+          fail-on-cache-miss: true
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with: { name: forms-ffdetr, path: ffdetr }
+      - run: |
+          mkdir -p out
+          python media/forms/run_forms.py out
+          if [ -f ffdetr/ffdetr-dets.jsonl ]; then python media/forms/ffdetr_match.py ffdetr/ffdetr-dets.jsonl out; else echo "no FFDetr detections"; fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: forms, path: out/ }
+
+  wordmath:
+    needs: [ocr-regions, charts, ffdetr]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11", cache: pip, cache-dependency-path: "media/requirements*.txt" }
+      - run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends libreoffice-writer libreoffice-math fonts-liberation fonts-dejavu-core
+          soffice --version || true
+      - run: pip install -r media/requirements.txt
+      - name: build easydoc-math 0.1.2 CLI
+        run: |
+          cargo --version
+          cargo build --release --manifest-path media/wordmath/edm/Cargo.toml
+          grep -A2 'name = "easydoc-math"' media/wordmath/edm/Cargo.lock || true
+      - name: plurimath/omml2mathml stylesheet at a pinned commit
+        run: curl -fsSL -o omml2mml.xsl https://raw.githubusercontent.com/plurimath/omml2mathml/324d0581ee3f51850052507ca07a16eb55b0458d/lib/omml2mathml/omml2mml.xsl
+      - run: mkdir -p out && python media/wordmath/run_wordmath.py media/wordmath/edm/target/release/edm-cli omml2mml.xsl out --pdf && rm -f out/*.docx out/*.pdf
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: wordmath, path: out/ }
+
+  ocr-timing:
+    needs: [ocr-regions, charts, ffdetr]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11", cache: pip, cache-dependency-path: "media/requirements*.txt" }
+      - run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends tesseract-ocr libtesseract-dev libleptonica-dev pkg-config fonts-liberation fonts-dejavu-core
+      - run: |
+          pip install -r media/requirements.txt
+          pip install onnxtr==0.9.0
+          pip install --no-binary tesserocr tesserocr==2.13.0 || echo "tesserocr build failed: pytesseract is used"
+      - uses: actions/cache/restore@v4
+        with: { path: /home/runner/media-models, key: "${{ env.MODELS_KEY }}", fail-on-cache-miss: true }
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            /home/runner/media-data/funsd
+            /home/runner/media-data/sroie
+            /home/runner/media-data/odb
+          key: media-ocr-data-v1
+          fail-on-cache-miss: true
+      - run: nproc && mkdir -p out && python media/ocr/timing.py out/ocr-timing.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: ocr-timing, path: out/ }
+
+  report:
+    needs: [prep-ocr, ocr-pages, ocr-regions, charts, ffdetr, deplot, forms, wordmath, ocr-timing]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11", cache: pip, cache-dependency-path: "media/requirements*.txt" }
+      - run: pip install -r media/requirements.txt
+      - uses: actions/download-artifact@v4
+        with: { path: art }
+      - run: |
+          mkdir -p out
+          python media/ocr/agg_ocr.py art out/ocr.md out/ocr.json || echo "ocr aggregation failed"
+          python media/charts/agg_charts.py art out/charts.md out/charts.json || echo "charts aggregation failed"
+          mkdir -p art/agg && cp out/*.md art/agg/ 2>/dev/null || true
+          python media/report.py art out/REPORT_draft.md
+          cat out/REPORT_draft.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: media-r4-report, path: out/ }
