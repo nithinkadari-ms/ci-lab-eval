@@ -90,6 +90,7 @@ class OnnxTR:
         so = ort.SessionOptions()
         so.intra_op_num_threads = 1
         so.inter_op_num_threads = 1
+        so.enable_cpu_mem_arena = False
         cfg = EngineConfig(providers=["CPUExecutionProvider"], session_options=so)
         repo = {"crnn": "Felix92/onnxtr-crnn-mobilenet-v3-small", "viptr": "Felix92/onnxtr-viptr-tiny"}[key]
         model = from_hub(repo, engine_cfg=cfg)

@@ -12,7 +12,7 @@ on:
         description: "OmniDocBench English text regions"
         default: "4000"
       part:
-        description: "all | charts (rebuild chart data and rerun charts + DePlot + report only)"
+        description: "all | charts (charts + DePlot) | nocharts (OCR, forms + FFDetr, Word formulas)"
         default: all
 
 permissions:
@@ -34,7 +34,7 @@ env:
 
 jobs:
   prep-ocr:
-    if: ${{ (inputs.part || 'all') == 'all' }}
+    if: ${{ (inputs.part || 'all') != 'charts' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
@@ -76,6 +76,7 @@ jobs:
         with: { name: verify, path: out/ }
 
   prep-charts:
+    if: ${{ (inputs.part || 'all') != 'nocharts' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
@@ -99,14 +100,14 @@ jobs:
 
   ocr-pages:
     needs: [prep-ocr, prep-charts]
-    if: ${{ (inputs.part || 'all') == 'all' }}
+    if: ${{ always() && needs.prep-ocr.result == 'success' && (inputs.part || 'all') != 'charts' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 300
     strategy:
       fail-fast: false
       max-parallel: 8
       matrix:
-        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -130,14 +131,14 @@ jobs:
             /home/runner/media-data/odb
           key: media-ocr-data-v1
           fail-on-cache-miss: true
-      - run: mkdir -p out && python media/ocr/run_ocr.py pages ${{ matrix.shard }} 14 out/ocr-pages-${{ matrix.shard }}.jsonl 4
+      - run: mkdir -p out && python media/ocr/run_ocr.py pages ${{ matrix.shard }} 28 out/ocr-pages-${{ matrix.shard }}.jsonl 3
       - uses: actions/upload-artifact@v4
         if: always()
         with: { name: "ocr-pages-${{ matrix.shard }}", path: out/ }
 
   ocr-regions:
     needs: [ocr-pages]
-    if: ${{ always() && (inputs.part || 'all') == 'all' }}
+    if: ${{ always() && (inputs.part || 'all') != 'charts' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     strategy:
@@ -166,14 +167,14 @@ jobs:
             /home/runner/media-data/odb
           key: media-ocr-data-v1
           fail-on-cache-miss: true
-      - run: mkdir -p out && python media/ocr/run_ocr.py regions ${{ matrix.shard }} 4 out/ocr-regions-${{ matrix.shard }}.jsonl 4
+      - run: mkdir -p out && python media/ocr/run_ocr.py regions ${{ matrix.shard }} 4 out/ocr-regions-${{ matrix.shard }}.jsonl 3
       - uses: actions/upload-artifact@v4
         if: always()
         with: { name: "ocr-regions-${{ matrix.shard }}", path: out/ }
 
   charts:
     needs: [ocr-pages]
-    if: always()
+    if: ${{ always() && (inputs.part || 'all') != 'nocharts' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 240
     strategy:
@@ -202,7 +203,7 @@ jobs:
 
   ffdetr:
     needs: [ocr-pages]
-    if: ${{ always() && (inputs.part || 'all') == 'all' }}
+    if: ${{ always() && (inputs.part || 'all') != 'charts' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 240
     env:
@@ -238,7 +239,7 @@ jobs:
 
   deplot:
     needs: [ocr-regions, charts, ffdetr]
-    if: always()
+    if: ${{ always() && (inputs.part || 'all') != 'nocharts' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 300
     env:
@@ -270,7 +271,7 @@ jobs:
 
   forms:
     needs: [ocr-regions, charts, ffdetr]
-    if: ${{ always() && (inputs.part || 'all') == 'all' }}
+    if: ${{ always() && (inputs.part || 'all') != 'charts' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     env:
@@ -313,7 +314,7 @@ jobs:
 
   wordmath:
     needs: [ocr-regions, charts, ffdetr]
-    if: ${{ always() && (inputs.part || 'all') == 'all' }}
+    if: ${{ always() && (inputs.part || 'all') != 'charts' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
@@ -339,7 +340,7 @@ jobs:
 
   ocr-timing:
     needs: [ocr-regions, charts, ffdetr]
-    if: ${{ always() && (inputs.part || 'all') == 'all' }}
+    if: ${{ always() && (inputs.part || 'all') != 'charts' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:

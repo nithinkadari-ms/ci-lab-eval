@@ -22,6 +22,7 @@ def session(path, threads=1):
     o = ort.SessionOptions()
     o.intra_op_num_threads = threads
     o.inter_op_num_threads = 1
+    o.enable_cpu_mem_arena = False
     return ort.InferenceSession(path, o, providers=["CPUExecutionProvider"])
 
 

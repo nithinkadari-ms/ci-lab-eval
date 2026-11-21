@@ -258,10 +258,12 @@ def _region(p):
 def main():
     mode, k, n, out = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), sys.argv[4]
     workers = int(sys.argv[5]) if len(sys.argv) > 5 else 4
+    if mode == "pages":
+        data.sroie_extract()
     items = shard(data.all_pages() if mode == "pages" else data.odb_regions(), k, n)
     fn = _page if mode == "pages" else _region
     errs = 0
-    with Pool(workers, initializer=init) as pool, open(out, "w", encoding="utf-8") as f:
+    with Pool(workers, initializer=init, maxtasksperchild=30) as pool, open(out, "w", encoding="utf-8") as f:
         for i, r in enumerate(pool.imap_unordered(fn, items, chunksize=1)):
             errs += "error" in r
             f.write(json.dumps(r) + "\n")

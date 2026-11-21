@@ -58,8 +58,25 @@ def _sroie_rows():
                 yield r
 
 
+SROIE_PNG = os.path.join(DATA, "sroie_png")
+
+
+def sroie_extract():
+    """write each receipt once as PNG + GT JSON so workers never hold the parquet rows in memory"""
+    if os.path.exists(os.path.join(SROIE_PNG, "done")):
+        return
+    os.makedirs(SROIE_PNG, exist_ok=True)
+    for i, r in enumerate(_sroie_rows()):
+        img = r["image"]
+        with open(os.path.join(SROIE_PNG, f"{i}.img"), "wb") as f:
+            f.write(img["bytes"] if isinstance(img, dict) else img)
+        json.dump(r["ocr"] or [], open(os.path.join(SROIE_PNG, f"{i}.json"), "w", encoding="utf-8"))
+    open(os.path.join(SROIE_PNG, "done"), "w").close()
+
+
 def sroie_pages():
-    n = sum(1 for _ in _sroie_rows())
+    sroie_extract()
+    n = len(glob.glob(os.path.join(SROIE_PNG, "*.json")))
     return [{"id": f"sroie:{i}", "group": f"sroie:{i}", "ds": "sroie", "defect": "receipt", "src": ("sroie", i)}
             for i in range(n)]
 
@@ -80,16 +97,11 @@ def _split_line(text, box):
     return out
 
 
-def _sroie_load(i, cache={}):
-    if "rows" not in cache:
-        cache["rows"] = list(_sroie_rows())
-    r = cache["rows"][i]
-    img = r["image"]
+def _sroie_load(i):
     from PIL import Image
-    pil = Image.open(io.BytesIO(img["bytes"] if isinstance(img, dict) else img)).convert("RGB")
-    rgb = np.array(pil)
+    rgb = np.array(Image.open(os.path.join(SROIE_PNG, f"{i}.img")).convert("RGB"))
     words, fields = [], []
-    for o in r["ocr"] or []:
+    for o in json.load(open(os.path.join(SROIE_PNG, f"{i}.json"), encoding="utf-8")):
         pts = o["box"]
         xs, ys = [p[0] for p in pts], [p[1] for p in pts]
         t = " ".join(str(o.get("text") or "").split())
