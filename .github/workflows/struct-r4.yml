@@ -1,0 +1,277 @@
+name: struct-r4
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "probe (tiny data, end-to-end check), full (all tests), report (rebuild the report from an earlier run)"
+        type: choice
+        options: [probe, full, report]
+        default: probe
+      from_run:
+        description: "report mode: run id whose struct-res-* artifacts are used"
+        type: string
+        default: ""
+
+concurrency:
+  group: struct-r4-${{ inputs.mode }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  SCALE: ${{ inputs.mode == 'full' && 'full' || 'probe' }}
+  STRUCT_DATA: ${{ github.workspace }}/sdata
+  STRUCT_RES: ${{ github.workspace }}/sres
+  DOCLING_RS_CACHE_DIR: /home/runner/dlrs
+  PYTHONUNBUFFERED: "1"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+jobs:
+  models:
+    if: inputs.mode != 'report'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11", cache: pip, cache-dependency-path: struct/requirements.txt }
+      - run: pip install -r struct/requirements.txt && pip freeze > /tmp/freeze.txt && cat /tmp/freeze.txt
+      - id: c
+        uses: actions/cache@v4
+        with:
+          path: /home/runner/dlrs
+          key: struct-dlrs-2.84.0-v1
+      - if: steps.c.outputs.cache-hit != 'true'
+        run: python -c "import docling_rs.models as m; m.download_models('/home/runner/dlrs', progress=False, enrichment=False)"
+      - run: ls -la /home/runner/dlrs/models && test -f /home/runner/dlrs/models/ocr_rec_v6.onnx && test -f /home/runner/dlrs/models/ocr_rec_v6_dict.txt
+      - run: python struct/probe.py
+
+  data-g8:
+    if: inputs.mode != 'report'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    outputs:
+      key: ${{ steps.k.outputs.key }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: k
+        run: echo "key=struct-g8-${SCALE}-${{ hashFiles('struct/g8/fetch.py', 'struct/g8/build.py', 'struct/common/pdf.py', 'struct/common/net.py', 'struct/common/cfg.py', 'struct/requirements.txt') }}" >> "$GITHUB_OUTPUT"
+      - id: c
+        uses: actions/cache@v4
+        with: { path: sdata/g8, key: "${{ steps.k.outputs.key }}" }
+      - if: steps.c.outputs.cache-hit != 'true'
+        uses: actions/setup-python@v5
+        with: { python-version: "3.11", cache: pip, cache-dependency-path: struct/requirements.txt }
+      - if: steps.c.outputs.cache-hit != 'true'
+        run: |
+          pip install -r struct/requirements.txt
+          python struct/g8/fetch.py
+          python struct/g8/build.py
+      - run: ls sdata/g8/docs | wc -l; du -sh sdata/g8; python -c "import json; d=json.load(open('sdata/g8/docs.json')); print(len(d), sum('R' in x['variants'] for x in d))"
+
+  data-g9:
+    if: inputs.mode != 'report'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    outputs:
+      key: ${{ steps.k.outputs.key }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: k
+        run: echo "key=struct-g9-${SCALE}-${{ hashFiles('struct/g9/fixtures.py', 'struct/g9/cracked.py', 'struct/common/textgen.py', 'struct/common/pdf.py', 'struct/common/net.py', 'struct/common/cfg.py', 'struct/requirements.txt') }}" >> "$GITHUB_OUTPUT"
+      - id: c
+        uses: actions/cache@v4
+        with: { path: sdata/g9, key: "${{ steps.k.outputs.key }}" }
+      - if: steps.c.outputs.cache-hit != 'true'
+        uses: actions/setup-python@v5
+        with: { python-version: "3.11", cache: pip, cache-dependency-path: struct/requirements.txt }
+      - if: steps.c.outputs.cache-hit != 'true'
+        run: |
+          pip install -r struct/requirements.txt
+          python struct/g9/fixtures.py
+          python struct/g9/cracked.py
+          rm -rf sdata/g9/cracked_dl/*.tar.gz
+      - run: du -sh sdata/g9/*; ls sdata/g9/cracked | wc -l
+
+  data-g12:
+    if: inputs.mode != 'report'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    outputs:
+      key: ${{ steps.k.outputs.key }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: k
+        run: echo "key=struct-g12-${SCALE}-${{ hashFiles('struct/g12/fixtures.py', 'struct/common/textgen.py', 'struct/common/cfg.py', 'struct/requirements.txt') }}" >> "$GITHUB_OUTPUT"
+      - id: c
+        uses: actions/cache@v4
+        with: { path: sdata/g12, key: "${{ steps.k.outputs.key }}" }
+      - if: steps.c.outputs.cache-hit != 'true'
+        uses: actions/setup-python@v5
+        with: { python-version: "3.11", cache: pip, cache-dependency-path: struct/requirements.txt }
+      - if: steps.c.outputs.cache-hit != 'true'
+        run: |
+          pip install -r struct/requirements.txt
+          python struct/g12/fixtures.py
+      - run: du -sh sdata/g12
+
+  data-g5:
+    if: inputs.mode != 'report'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    outputs:
+      key: ${{ steps.k.outputs.key }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: k
+        run: echo "key=struct-g5-${SCALE}-${{ hashFiles('struct/g5/data.py', 'struct/common/net.py', 'struct/common/cfg.py', 'struct/requirements.txt') }}" >> "$GITHUB_OUTPUT"
+      - id: c
+        uses: actions/cache@v4
+        with: { path: sdata/g5, key: "${{ steps.k.outputs.key }}" }
+      - if: steps.c.outputs.cache-hit != 'true'
+        uses: actions/setup-python@v5
+        with: { python-version: "3.11", cache: pip, cache-dependency-path: struct/requirements.txt }
+      - if: steps.c.outputs.cache-hit != 'true'
+        run: |
+          pip install -r struct/requirements.txt
+          python struct/g5/data.py
+      - run: du -sh sdata/g5; ls sdata/g5/pdf | wc -l
+
+  data-pmc:
+    if: inputs.mode != 'report'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    outputs:
+      key: ${{ steps.k.outputs.key }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: k
+        run: echo "key=struct-pmc-${SCALE}-${{ hashFiles('struct/g7/data.py', 'struct/g7/jats.py', 'struct/common/net.py', 'struct/common/cfg.py', 'struct/requirements.txt') }}" >> "$GITHUB_OUTPUT"
+      - id: c
+        uses: actions/cache@v4
+        with: { path: sdata/pmc, key: "${{ steps.k.outputs.key }}" }
+      - if: steps.c.outputs.cache-hit != 'true'
+        uses: actions/setup-python@v5
+        with: { python-version: "3.11", cache: pip, cache-dependency-path: struct/requirements.txt }
+      - if: steps.c.outputs.cache-hit != 'true'
+        run: |
+          pip install -r struct/requirements.txt
+          python struct/g7/data.py
+      - run: du -sh sdata/pmc; ls sdata/pmc | wc -l
+
+  data-g4:
+    if: inputs.mode != 'report'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    outputs:
+      key: ${{ steps.k.outputs.key }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: k
+        run: echo "key=struct-g4-${SCALE}-${{ hashFiles('struct/g4/gen.py', 'struct/common/textgen.py', 'struct/common/cfg.py', 'struct/requirements.txt') }}" >> "$GITHUB_OUTPUT"
+      - id: c
+        uses: actions/cache@v4
+        with: { path: sdata/g4, key: "${{ steps.k.outputs.key }}" }
+      - if: steps.c.outputs.cache-hit != 'true'
+        uses: actions/setup-python@v5
+        with: { python-version: "3.11", cache: pip, cache-dependency-path: struct/requirements.txt }
+      - if: steps.c.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends libreoffice-writer fonts-dejavu-core fonts-liberation
+          pip install -r struct/requirements.txt
+          python struct/g4/gen.py
+      - run: du -sh sdata/g4; ls sdata/g4/pdf | wc -l
+
+  run:
+    needs: [models, data-g8, data-g9, data-g12, data-g5, data-pmc, data-g4]
+    if: ${{ !cancelled() && inputs.mode != 'report' && needs.models.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 330
+    strategy:
+      fail-fast: false
+      max-parallel: 10
+      matrix:
+        include:
+          - { gap: g8, shard: 0, nshard: 5 }
+          - { gap: g8, shard: 1, nshard: 5 }
+          - { gap: g8, shard: 2, nshard: 5 }
+          - { gap: g8, shard: 3, nshard: 5 }
+          - { gap: g8, shard: 4, nshard: 5 }
+          - { gap: g5, shard: 0, nshard: 4 }
+          - { gap: g5, shard: 1, nshard: 4 }
+          - { gap: g5, shard: 2, nshard: 4 }
+          - { gap: g5, shard: 3, nshard: 4 }
+          - { gap: g9, shard: 0, nshard: 3 }
+          - { gap: g9, shard: 1, nshard: 3 }
+          - { gap: g9, shard: 2, nshard: 3 }
+          - { gap: g7, shard: 0, nshard: 2 }
+          - { gap: g7, shard: 1, nshard: 2 }
+          - { gap: g12, shard: 0, nshard: 1 }
+          - { gap: g4, shard: 0, nshard: 1 }
+    env:
+      SHARD: ${{ matrix.shard }}
+      NSHARD: ${{ matrix.nshard }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11", cache: pip, cache-dependency-path: struct/requirements.txt }
+      - run: pip install -r struct/requirements.txt
+      - uses: actions/cache/restore@v4
+        with: { path: /home/runner/dlrs, key: struct-dlrs-2.84.0-v1, fail-on-cache-miss: true }
+      - if: matrix.gap == 'g8'
+        uses: actions/cache/restore@v4
+        with: { path: sdata/g8, key: "${{ needs.data-g8.outputs.key }}", fail-on-cache-miss: true }
+      - if: matrix.gap == 'g9'
+        uses: actions/cache/restore@v4
+        with: { path: sdata/g9, key: "${{ needs.data-g9.outputs.key }}", fail-on-cache-miss: true }
+      - if: matrix.gap == 'g12'
+        uses: actions/cache/restore@v4
+        with: { path: sdata/g12, key: "${{ needs.data-g12.outputs.key }}", fail-on-cache-miss: true }
+      - if: matrix.gap == 'g5'
+        uses: actions/cache/restore@v4
+        with: { path: sdata/g5, key: "${{ needs.data-g5.outputs.key }}", fail-on-cache-miss: false }
+      - if: matrix.gap == 'g5' || matrix.gap == 'g7'
+        uses: actions/cache/restore@v4
+        with: { path: sdata/pmc, key: "${{ needs.data-pmc.outputs.key }}", fail-on-cache-miss: false }
+      - if: matrix.gap == 'g4'
+        uses: actions/cache/restore@v4
+        with: { path: sdata/g4, key: "${{ needs.data-g4.outputs.key }}", fail-on-cache-miss: true }
+      - run: python struct/${{ matrix.gap }}/run.py
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: struct-res-${{ matrix.gap }}-${{ matrix.shard }}
+          path: sres/
+          if-no-files-found: warn
+          retention-days: 30
+
+  report:
+    needs: [run]
+    if: ${{ !cancelled() && (inputs.mode == 'report' || needs.run.result != 'skipped') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11", cache: pip, cache-dependency-path: struct/requirements.txt }
+      - run: pip install -r struct/requirements.txt
+      - if: inputs.mode != 'report'
+        uses: actions/download-artifact@v4
+        with: { pattern: "struct-res-*", path: sres, merge-multiple: true }
+      - if: inputs.mode == 'report'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run download "${{ inputs.from_run }}" -R "${{ github.repository }}" -p 'struct-res-*' -D sres_dl
+          mkdir -p sres
+          for d in sres_dl/*/; do cp -r "$d". sres/; done
+      - run: ls -R sres | head -50; python struct/report.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: struct-r4-report
+          path: sres/report/
+          retention-days: 30

@@ -1,0 +1,11 @@
+docling-rs==2.84.0
+pikepdf==9.4.2
+pypdfium2==4.30.0
+pdfminer.six==20231228
+onnxruntime==1.20.1
+python-docx==1.1.2
+reportlab==4.2.5
+symspellpy==6.7.8
+lxml==5.3.0
+pyarrow==18.1.0
+requests==2.32.3
