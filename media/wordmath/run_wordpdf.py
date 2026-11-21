@@ -16,7 +16,18 @@ sys.path.insert(0, os.path.join(ROOT, "formula", "r3", "logic"))
 sys.path.insert(0, os.path.join(ROOT, "formula", "scripts"))
 
 
-def region(page_words, W, H, c):
+def anchor(chars, word):
+    """box of the character run spelling `word` (pdfplumber may glue the anchor to the formula glyphs)"""
+    n = len(word)
+    for i in range(len(chars) - n + 1):
+        if all(chars[i + j]["text"] == word[j] for j in range(n)):
+            cs = chars[i:i + n]
+            return {"x0": min(c["x0"] for c in cs), "x1": max(c["x1"] for c in cs),
+                    "top": min(c["top"] for c in cs), "bottom": max(c["bottom"] for c in cs)}
+    return None
+
+
+def region(page_words, chars, W, H, c):
     """formula region in pdfplumber (top-left) coordinates, or None"""
     mk = [w for w in page_words if w["text"] == "EQ" + c["id"]]
     if not mk:
@@ -24,11 +35,9 @@ def region(page_words, W, H, c):
     m = mk[0]
     if c["mode"] == "display":
         return (30.0, m["bottom"] + 1.0, W - 30.0, H - 30.0), None
-    l = [w for w in page_words if w["text"] == "QQL"]
-    r = [w for w in page_words if w["text"] == "QQR"]
+    l, r = anchor(chars, "QQL"), anchor(chars, "QQR")
     if not l or not r:
         return None, "inline anchors not found"
-    l, r = l[0], r[0]
     lh = max(6.0, l["bottom"] - l["top"])
     if abs((l["top"] + l["bottom"]) / 2 - (r["top"] + r["bottom"]) / 2) > lh:
         return (l["x1"] + 0.3, min(l["top"], r["top"]) - 1.2 * lh, W - 30.0, max(l["bottom"], r["bottom"]) + 1.2 * lh), "wrapped"
@@ -60,9 +69,10 @@ def main():
                 if key not in words:
                     with pdfplumber.open(path) as doc:
                         pg = doc.pages[c["page"]]
-                        words[key] = (pg.extract_words(), float(pg.width), float(pg.height))
-                pw, W, H = words[key]
-                box, note = region(pw, W, H, c)
+                        chars = [{k: ch[k] for k in ("text", "x0", "x1", "top", "bottom")} for ch in pg.chars]
+                        words[key] = (pg.extract_words(), chars, float(pg.width), float(pg.height))
+                pw, chars, W, H = words[key]
+                box, note = region(pw, chars, W, H, c)
                 rec["note"] = note
                 if box is None:
                     raise ValueError(note)
