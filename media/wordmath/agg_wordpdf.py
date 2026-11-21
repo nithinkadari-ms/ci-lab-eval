@@ -20,8 +20,28 @@ from rapidfuzz.distance import Levenshtein  # noqa: E402
 from texnorm import norm_tokens  # noqa: E402
 from common import pfmt, sign_test  # noqa: E402
 
-NO_RE = re.compile(r"\\tag\*?\s*\{\s*\d+\s*\}|#\s*\(\s*\d+\s*\)|\(\s*\d+\s*\)\s*$")
+NO_RE = re.compile(r"\\tag\*?\s*\{[\d\s]+\}|#\s*\([\d\s]+\)|\([\d\s]+\)\s*$")
 TAUS = [round(0.05 * i, 2) for i in range(21)]
+LEFT, RIGHT, ATOP = "\\left({", "\\right)", " \\atop "
+
+
+def with_binom(g):
+    r"""gold of a parenthesised noBar fraction, \left({a \atop b}\right), also accepts plain \binom{a}{b}"""
+    out, start = g, 0
+    while True:
+        i = out.find(LEFT, start)
+        if i < 0:
+            return out
+        j, depth = i + len(LEFT), 1
+        while j < len(out) and depth:
+            depth += {"{": 1, "}": -1}.get(out[j], 0)
+            j += 1
+        inner = out[i + len(LEFT):j - 1]
+        if out[j:].startswith(RIGHT) and ATOP in inner:
+            a, b = inner.split(ATOP, 1)
+            out = out[:i] + "\\binom{" + a + "}{" + b + "}" + out[j + len(RIGHT):]
+        else:
+            start = i + 1
 
 
 def norm(s):
@@ -51,7 +71,8 @@ def main():
     golds = {}
     for m in glob.glob(os.path.join(art, "**", "manifest.json"), recursive=True):
         for c in json.load(open(m, encoding="utf-8")):
-            golds[c["id"] + ("@word" if "omml" in c else "@win")] = c["gold"]
+            gl = list(c["gold"])
+            golds[c["id"] + ("@word" if "omml" in c else "@win")] = gl + [x for x in (with_binom(g) for g in gl) if x not in gl]
     R = defaultdict(list)
     for f in glob.glob(os.path.join(art, "**", "wordpdf-*.jsonl"), recursive=True):
         for line in open(f, encoding="utf-8"):

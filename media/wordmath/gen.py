@@ -149,13 +149,16 @@ def tx(n):
             env = {"(": "pmatrix", "[": "bmatrix", "{": "Bmatrix", "|": "vmatrix"}[beg]
             body = " \\\\ ".join(" & ".join(tx(c)[0] for c in r) for r in inner[0][1])
             return [f"\\begin{{{env}}}{body}\\end{{{env}}}"] + comb(["\\left" + lo, tx(inner[0]), "\\right" + hi])
+        extra = []
+        if len(inner) == 1 and inner[0][0] == "frac" and inner[0][3] == "noBar" and beg == "(":
+            extra = comb(["\\binom{", tx(inner[0][1]), "}{", tx(inner[0][2]), "}"])
         parts = ["\\left" + lo]
         for j, x in enumerate(inner):
             if j:
                 parts.append("|")
             parts.append(tx(x))
         parts.append("\\right" + hi)
-        return comb(parts)
+        return comb(parts) + extra
     if k == "eqarr":
         body = " \\\\ ".join(tx(r)[0] for r in n[1])
         return [f"\\begin{{aligned}}{body}\\end{{aligned}}", f"\\begin{{array}}{{l}}{body}\\end{{array}}",
