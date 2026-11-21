@@ -32,7 +32,7 @@ OPENOCR = os.environ.get("UNIONST_OPENOCR", "/home/runner/unionst/OpenOCR")
 UNIONST_PTH = os.environ.get("UNIONST_PTH", "/home/runner/extra-models/unionst/UnionST-SP.pth")
 DOCRES_DIR = os.environ.get("DOCRES_DIR", "/home/runner/docres")
 DOCRES_PKL = os.environ.get("DOCRES_PKL", "/home/runner/extra-models/docres/checkpoints/docres.pkl")
-CAP_PER_DEFECT = 6
+CAP_PER_DEFECT = 4
 FORCED_CLEAN = 4
 PADDLE = {"v6s", "v6m"}
 
@@ -67,10 +67,18 @@ class UnionST:
             raise RuntimeError(f"UnionST checkpoint misses {len(mk)} model keys, e.g. {sorted(mk)[:3]}")
 
     def read(self, rgbs):
+        """OpenOCR's NRTR decoder places tensors with device=src.get_device(), which is -1 on CPU and rejected by
+        current torch; during this call get_device returns the tensor's device object instead."""
+        import torch
         from PIL import Image
         if not rgbs:
             return []
-        out = self.rec(img_numpy_list=[Image.fromarray(x) for x in rgbs], batch_num=1)
+        orig = torch.Tensor.get_device
+        torch.Tensor.get_device = lambda t: t.device
+        try:
+            out = self.rec(img_numpy_list=[Image.fromarray(x) for x in rgbs], batch_num=1)
+        finally:
+            torch.Tensor.get_device = orig
         return [(str(r["text"]), float(r["score"])) for r in out]
 
 
