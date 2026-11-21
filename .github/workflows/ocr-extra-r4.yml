@@ -1,0 +1,123 @@
+name: ocr-extra-r4
+
+# Gap 1 extra challengers (tests only): UnionST-SP, UniRec-0.1B, gated DocRes, on the same pages and detector crops
+# as media-r4 (same caches). At most 8 jobs at once.
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: ocr-extra-r4-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  MEDIA_DATA: /home/runner/media-data
+  MEDIA_MODELS: /home/runner/media-models
+  PYTHONUNBUFFERED: "1"
+  HF_HUB_DISABLE_PROGRESS_BARS: "1"
+  OCR_N_SYNTH: "240"
+  UNIONST_SHA: df853d8e7c93517856ffe4e68e10cd1c7d60b924
+  DOCRES_SPACE_SHA: e9d734906ea26ec569a8daeac0bfd14f495990ab
+  UNIONST_CODE: 33ceb8124b70ddedf60213294de58d830d9bf0a4
+  DOCRES_CODE: d3e3a18c7c7ad10e4615ca2eb6a10f83128d8560
+
+jobs:
+  prep:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - run: pip install huggingface_hub==0.35.3
+      - id: c
+        uses: actions/cache@v4
+        with: { path: /home/runner/extra-models, key: "ocr-extra-models-v1" }
+      - if: steps.c.outputs.cache-hit != 'true'
+        run: |
+          python - <<'PY'
+          import os
+          from huggingface_hub import hf_hub_download
+          hf_hub_download("Yesianrohn/UnionST-Models", "UnionST-SP.pth", revision=os.environ["UNIONST_SHA"], local_dir="/home/runner/extra-models/unionst")
+          hf_hub_download("Yesianrohn/UnionST-Models", "README.md", revision=os.environ["UNIONST_SHA"], local_dir="/home/runner/extra-models/unionst")
+          hf_hub_download("qubvel-hf/documents-restoration", "checkpoints/docres.pkl", repo_type="space", revision=os.environ["DOCRES_SPACE_SHA"], local_dir="/home/runner/extra-models/docres")
+          PY
+      - run: |
+          ls -la /home/runner/extra-models/unionst /home/runner/extra-models/docres/checkpoints
+          sha256sum /home/runner/extra-models/unionst/UnionST-SP.pth /home/runner/extra-models/docres/checkpoints/docres.pkl
+          grep -i -n "licen" /home/runner/extra-models/unionst/README.md || true
+
+  extra:
+    needs: prep
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    env:
+      OMP_NUM_THREADS: "4"
+    strategy:
+      fail-fast: false
+      max-parallel: 8
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11", cache: pip, cache-dependency-path: "media/requirements*.txt" }
+      - run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends fonts-liberation fonts-dejavu-core
+      - run: |
+          pip install -r media/requirements.txt
+          pip install torch==2.15.0 torchvision==0.29.2 --index-url https://download.pytorch.org/whl/cpu
+          pip install einops==0.8.0
+      - name: UnionST's OpenOCR copy and DocRes code at pinned commits
+        run: |
+          git init -q /home/runner/unionst && cd /home/runner/unionst
+          git remote add origin https://github.com/YesianRohn/UnionST
+          git sparse-checkout init --cone && git sparse-checkout set OpenOCR
+          git fetch -q --depth 1 origin $UNIONST_CODE && git checkout -q FETCH_HEAD
+          ls OpenOCR/configs/rec/nrtr/svtrv2_nrtr_unionst.yml OpenOCR/LICENSE; ls /home/runner/unionst
+          git init -q /home/runner/docres && cd /home/runner/docres
+          git remote add origin https://github.com/ZZZHANG-jx/DocRes
+          git fetch -q --depth 1 origin $DOCRES_CODE && git checkout -q FETCH_HEAD && head -3 LICENSE
+      - uses: actions/cache/restore@v4
+        with: { path: /home/runner/extra-models, key: "ocr-extra-models-v1", fail-on-cache-miss: true }
+      - uses: actions/cache/restore@v4
+        with: { path: /home/runner/media-models, key: "media-models-v1-${{ hashFiles('media/fetch.py') }}", fail-on-cache-miss: true }
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            /home/runner/media-data/funsd
+            /home/runner/media-data/sroie
+            /home/runner/media-data/odb
+          key: media-ocr-data-v1
+          fail-on-cache-miss: true
+      - uses: actions/cache/restore@v4
+        with:
+          path: formula/models_ref
+          key: formula-r3-ref-v1-${{ hashFiles('formula/requirements.txt', 'formula/scripts/fetch_ref.py') }}
+          fail-on-cache-miss: true
+      - run: mkdir -p out && python media/ocr/extra.py ${{ matrix.shard }} 12 out/extra-${{ matrix.shard }}.jsonl
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: "ocr-extra-${{ matrix.shard }}", path: out/ }
+
+  report:
+    needs: [extra]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - run: pip install rapidfuzz==3.14.6 scipy==1.17.1
+      - uses: actions/download-artifact@v4
+        with: { path: art, pattern: "ocr-extra-*" }
+      - run: |
+          mkdir -p out
+          python media/ocr/extra_agg.py art out/ocr_extra.md out/ocr_extra.json
+          cat out/ocr_extra.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: ocr-extra-report, path: out/ }
