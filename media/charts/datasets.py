@@ -61,6 +61,7 @@ def chartx_items():
 
 def parse_donut(s):
     """Donut json2token string -> python object (dicts from <s_k>..</s_k>, lists split on top-level <sep/>)."""
+    s = re.sub(r"</?s>", "", s or "")
     toks = re.findall(r"<s_[^>]+>|</s_[^>]+>|<sep/>|[^<]+|<", s)
     pos = 0
 
@@ -75,6 +76,9 @@ def parse_donut(s):
             if t.startswith("<s_"):
                 k = t[3:-1]
                 pos += 1
+                if k in cur:
+                    items.append(cur)
+                    cur = {}
                 cur[k] = parse_seq(f"</s_{k}>")
             elif t == "<sep/>":
                 pos += 1
@@ -106,12 +110,17 @@ def plotqa_items(n):
         for row in b.to_pylist():
             if r % step == 0 and len(items) < n:
                 d = parse_donut(row["text"])
-                d = d if isinstance(d, dict) else {}
                 if not items:
-                    print("plotqa sample keys", sorted(d.keys()), str(d)[:300])
-                models = d.get("models", [])
-                if isinstance(models, dict):
-                    models = [models]
+                    print("plotqa raw", str(row["text"])[:300], "| parsed", str(d)[:300])
+                if isinstance(d, list):
+                    models = [x for x in d if isinstance(x, dict)]
+                    d = models[0] if models else {}
+                elif isinstance(d, dict) and "models" in d:
+                    models = d["models"] if isinstance(d["models"], list) else [d["models"]]
+                elif isinstance(d, dict):
+                    models = [d]
+                else:
+                    models, d = [], {}
                 series = []
                 for m in models:
                     if not isinstance(m, dict):

@@ -11,6 +11,9 @@ on:
       n_odb:
         description: "OmniDocBench English text regions"
         default: "4000"
+      part:
+        description: "all | charts (rebuild chart data and rerun charts + DePlot + report only)"
+        default: all
 
 permissions:
   contents: read
@@ -31,6 +34,7 @@ env:
 
 jobs:
   prep-ocr:
+    if: ${{ (inputs.part || 'all') == 'all' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
@@ -95,6 +99,7 @@ jobs:
 
   ocr-pages:
     needs: [prep-ocr, prep-charts]
+    if: ${{ (inputs.part || 'all') == 'all' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 300
     strategy:
@@ -132,7 +137,7 @@ jobs:
 
   ocr-regions:
     needs: [ocr-pages]
-    if: always()
+    if: ${{ always() && (inputs.part || 'all') == 'all' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     strategy:
@@ -197,7 +202,7 @@ jobs:
 
   ffdetr:
     needs: [ocr-pages]
-    if: always()
+    if: ${{ always() && (inputs.part || 'all') == 'all' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 240
     env:
@@ -265,7 +270,7 @@ jobs:
 
   forms:
     needs: [ocr-regions, charts, ffdetr]
-    if: always()
+    if: ${{ always() && (inputs.part || 'all') == 'all' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     env:
@@ -308,7 +313,7 @@ jobs:
 
   wordmath:
     needs: [ocr-regions, charts, ffdetr]
-    if: always()
+    if: ${{ always() && (inputs.part || 'all') == 'all' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
@@ -334,7 +339,7 @@ jobs:
 
   ocr-timing:
     needs: [ocr-regions, charts, ffdetr]
-    if: always()
+    if: ${{ always() && (inputs.part || 'all') == 'all' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
