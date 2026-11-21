@@ -1,3 +1,4 @@
+import json
 import os
 import re
 import time
@@ -24,10 +25,11 @@ def converter(**kw):
     return _CONV[k]
 
 
-def convert(path, **kw):
+def convert(path, page_range=None, **kw):
     c = converter(**kw)
     t0, p0 = time.perf_counter(), time.process_time()
-    doc = c.convert(str(path)).document.export_to_dict()
+    native = c._convert_native(str(path), page_range, None)
+    doc = json.loads(native.document_json)
     return doc, time.perf_counter() - t0, time.process_time() - p0
 
 
