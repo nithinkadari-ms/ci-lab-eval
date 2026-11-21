@@ -1,0 +1,173 @@
+name: wordpdf-r4
+
+# Word formulas in PDFs with Cambria Math.
+#   mode=gen:   build the .docx set (exported to PDF by real Word on the laptop) and render the same kind of
+#               formulas with LuaLaTeX + unicode-math + Cambria Math on a windows runner.
+#   mode=score: glyph logic, Pix2Text MFR 1.5 int8 and logic+fallback on both PDF sets.
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "gen | score"
+        default: gen
+      word_release:
+        description: "release tag holding word-pdf.zip (real Word PDFs + manifest)"
+        default: word-pdf-v1
+      win_run:
+        description: "score: run ID of the gen run with the win-cambria-pdfs artifact"
+        default: ""
+      n_docs:
+        description: "gen: number of .docx files (4 equations each)"
+        default: "300"
+      n_win:
+        description: "gen: formulas rendered on windows"
+        default: "2000"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: wordpdf-r4-${{ github.ref }}-${{ inputs.mode }}
+  cancel-in-progress: false
+
+env:
+  PYTHONUNBUFFERED: "1"
+
+jobs:
+  gen-docx:
+    if: ${{ inputs.mode == 'gen' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - run: python media/wordmath/wordset.py docx out/docx ${{ inputs.n_docs }} 4 && ls out/docx | wc -l && du -sh out/docx
+      - uses: actions/upload-artifact@v4
+        with: { name: word-docx-set, path: out/docx }
+
+  win-render:
+    if: ${{ inputs.mode == 'gen' }}
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - name: fonts actually on the runner
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force out | Out-Null
+          Get-ChildItem C:\Windows\Fonts | Where-Object { $_.Name -match 'cambria|calibri|times|segoe.*math|stix' } | Select-Object Name, Length | Format-Table -AutoSize | Out-String -Width 200 | Tee-Object -FilePath out/fonts.txt
+          if (-not (Test-Path C:\Windows\Fonts\cambria.ttc)) { Write-Output "cambria.ttc missing" | Tee-Object -Append -FilePath out/fonts.txt }
+      - uses: TeX-Live/setup-texlive-action@v4
+        with:
+          packages: |
+            scheme-basic
+            luaotfload
+            fontspec
+            unicode-math
+            lualatex-math
+            amsmath
+            mathtools
+            etoolbox
+            geometry
+      - run: python media/wordmath/wordset.py tex out/win ${{ inputs.n_win }}
+      - name: LuaLaTeX with Cambria Math
+        shell: pwsh
+        run: |
+          Set-Location out/win
+          luaotfload-tool --update --force 2>&1 | Select-Object -Last 3
+          luaotfload-tool --find="Cambria Math" 2>&1 | Tee-Object -Append -FilePath ../fonts.txt
+          Get-ChildItem *.tex | ForEach-Object {
+            lualatex -interaction=nonstopmode $_.Name *> ($_.BaseName + ".out.txt")
+            $pdf = $_.BaseName + ".pdf"
+            "$($_.Name): exit $LASTEXITCODE, pdf=$(Test-Path $pdf), errors=$((Select-String -Path ($_.BaseName + '.log') -Pattern '^! ' -ErrorAction SilentlyContinue | Measure-Object).Count)" | Tee-Object -Append -FilePath ../compile.txt
+          }
+          Remove-Item *.aux, *.out.txt -ErrorAction SilentlyContinue
+      - name: fonts embedded in the PDFs
+        shell: bash
+        run: |
+          pip install pypdf==5.1.0
+          python -c "import glob,collections,pypdf;c=collections.Counter();[c.update({str(f.get('/BaseFont')) for p in pypdf.PdfReader(x).pages[:3] for f in (p['/Resources'].get('/Font') or {}).values()}) for x in glob.glob('out/win/*.pdf')];print(c)" | tee -a out/fonts.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: win-cambria-pdfs
+          path: |
+            out/win/*.pdf
+            out/win/*.log
+            out/win/manifest.json
+            out/fonts.txt
+            out/compile.txt
+
+  score:
+    if: ${{ inputs.mode == 'score' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      max-parallel: 8
+      matrix:
+        include:
+          - { set: word, shard: 0, n: 3 }
+          - { set: word, shard: 1, n: 3 }
+          - { set: word, shard: 2, n: 3 }
+          - { set: win, shard: 0, n: 5 }
+          - { set: win, shard: 1, n: 5 }
+          - { set: win, shard: 2, n: 5 }
+          - { set: win, shard: 3, n: 5 }
+          - { set: win, shard: 4, n: 5 }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11", cache: pip, cache-dependency-path: "formula/requirements*.txt" }
+      - run: pip install -r formula/requirements.txt pdfplumber==0.11.10
+      - uses: actions/cache/restore@v4
+        with:
+          path: formula/models
+          key: formula-r3-mfr-v1-${{ hashFiles('formula/requirements.txt', 'formula/scripts/fetch_models.py', 'formula/scripts/quant.py', 'formula/scripts/split_dec.py', 'formula/scripts/build_variants.py', 'formula/scripts/mfr.py', 'formula/gt.json', 'formula/crops/**') }}
+          fail-on-cache-miss: true
+      - if: matrix.set == 'word'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download ${{ inputs.word_release }} -R ${{ github.repository }} -p word-pdf.zip -D dl
+          mkdir -p data && cd data && unzip -q ../dl/word-pdf.zip && ls | head
+      - if: matrix.set == 'win'
+        uses: actions/download-artifact@v4
+        with:
+          name: win-cambria-pdfs
+          path: data
+          run-id: ${{ inputs.win_run }}
+          github-token: ${{ github.token }}
+      - run: |
+          ls data | head; mkdir -p out
+          M=$(find data -name manifest.json | head -1); P=$(dirname "$(find data -name '*.pdf' | head -1)")
+          python media/wordmath/run_wordpdf.py ${{ matrix.set }} "$P" "$M" ${{ matrix.shard }} ${{ matrix.n }} out/wordpdf-${{ matrix.set }}-${{ matrix.shard }}.jsonl
+          cp "$M" out/manifest-${{ matrix.set }}.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: "wordpdf-${{ matrix.set }}-${{ matrix.shard }}", path: out/ }
+
+  report:
+    needs: [score]
+    if: ${{ always() && inputs.mode == 'score' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - run: pip install rapidfuzz==3.14.6 scipy==1.17.1
+      - uses: actions/download-artifact@v4
+        with: { path: art, pattern: "wordpdf-*" }
+      - run: |
+          mkdir -p out
+          for f in art/*/manifest-*.json; do d=art/m_$(basename $f .json); mkdir -p $d; cp $f $d/manifest.json; done
+          python media/wordmath/agg_wordpdf.py art out/wordpdf.md out/wordpdf.json
+          cat out/wordpdf.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: wordpdf-report, path: out/ }
