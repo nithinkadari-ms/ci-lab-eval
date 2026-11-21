@@ -1,0 +1,111 @@
+name: charts-plotqa-r4
+
+# Re-score PlotQA only (positional keys: the repack stores categorical x as indices) and rebuild the charts report
+# with the synthetic and ChartX rows of run 44881551040. Uses the media-r4 caches.
+on:
+  workflow_dispatch:
+    inputs:
+      charts_run:
+        description: "media-r4 charts run whose synthetic and ChartX rows are kept"
+        default: "44881551040"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: charts-plotqa-r4-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  MEDIA_DATA: /home/runner/media-data
+  MEDIA_MODELS: /home/runner/media-models
+  PYTHONUNBUFFERED: "1"
+  HF_HUB_DISABLE_PROGRESS_BARS: "1"
+  CHARTS_ONLY_DS: plotqa
+
+jobs:
+  ours:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11", cache: pip, cache-dependency-path: "media/requirements*.txt" }
+      - run: pip install -r media/requirements.txt
+      - uses: actions/cache/restore@v4
+        with: { path: /home/runner/media-models, key: "media-models-v1-${{ hashFiles('media/fetch.py') }}", fail-on-cache-miss: true }
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            /home/runner/media-data/charts
+            /home/runner/media-data/chartx
+          key: "media-charts-v1-${{ hashFiles('media/charts/gen_vector.py', 'media/charts/datasets.py', 'media/fetch.py') }}"
+          fail-on-cache-miss: true
+      - run: mkdir -p out && python media/charts/run_charts.py ours 0 1 out/charts-ours-plotqa.jsonl
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: charts-ours-plotqa, path: out/ }
+
+  deplot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      OMP_NUM_THREADS: "4"
+    strategy:
+      fail-fast: false
+      max-parallel: 5
+      matrix:
+        shard: [0, 1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11", cache: pip, cache-dependency-path: "media/requirements*.txt" }
+      - run: |
+          pip install -r media/requirements.txt
+          pip install torch==2.15.0 --index-url https://download.pytorch.org/whl/cpu
+          pip install -r media/requirements-torch.txt
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            /home/runner/media-data/charts
+            /home/runner/media-data/chartx
+          key: "media-charts-v1-${{ hashFiles('media/charts/gen_vector.py', 'media/charts/datasets.py', 'media/fetch.py') }}"
+          fail-on-cache-miss: true
+      - run: mkdir -p out && python media/charts/run_charts.py deplot ${{ matrix.shard }} 5 out/charts-deplot-plotqa-${{ matrix.shard }}.jsonl
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: "charts-deplot-plotqa-${{ matrix.shard }}", path: out/ }
+
+  report:
+    needs: [ours, deplot]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - run: pip install rapidfuzz==3.14.6 scipy==1.17.1 numpy==2.4.6
+      - uses: actions/download-artifact@v4
+        with: { path: new, pattern: "charts-*" }
+      - uses: actions/download-artifact@v4
+        with:
+          path: old
+          pattern: "charts-*"
+          run-id: ${{ inputs.charts_run }}
+          github-token: ${{ github.token }}
+      - run: |
+          mkdir -p art/old out
+          python - <<'PY'
+          import glob, json, os
+          for f in glob.glob("old/**/*.jsonl", recursive=True):
+              rows = [l for l in open(f, encoding="utf-8") if l.strip() and json.loads(l)["ds"] != "plotqa"]
+              open(os.path.join("art/old", os.path.basename(f)), "w", encoding="utf-8").writelines(rows)
+          PY
+          cp -r new art/new
+          python media/charts/agg_charts.py art out/charts.md out/charts.json
+          cat out/charts.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: charts-report-fixed, path: out/ }

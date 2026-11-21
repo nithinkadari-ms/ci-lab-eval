@@ -69,6 +69,28 @@ def point_f1(gt, pred, tol=0.02):
     return 2 * P * R / (P + R) if P + R else 0.0
 
 
+def positional(it):
+    """PlotQA's repack stores categorical x as indices 0..n-1 (the tick labels are not in it), so its keys are
+    compared by position: the k-th point of a series in reading order."""
+    if it["ds"] != "plotqa":
+        return False
+    xs = [x for s_ in it["gt"]["series"] for x in s_["x"]]
+    return bool(xs) and all(str(x).isdigit() for x in xs)
+
+
+def to_positional(series):
+    out = []
+    for s_ in series:
+        idx = list(range(len(s_["y"])))
+        xi = s_.get("xi")
+        if xi and len(xi) == len(idx) and None not in xi:
+            idx.sort(key=lambda k: xi[k])
+        elif s_["x"] and all(str(x).lstrip("-").isdigit() for x in s_["x"]):
+            idx.sort(key=lambda k: int(s_["x"][k]))
+        out.append(dict(s_, x=[f"#{n}" for n in range(len(idx))], y=[s_["y"][k] for k in idx], xi=None))
+    return out
+
+
 def score(it, pred):
     gt = it["gt"]
     rec = {k: it.get(k) for k in ("id", "ds", "var", "ctype", "group", "supported")}
@@ -78,8 +100,12 @@ def score(it, pred):
         return rec
     ps = [{"name": s.get("name", ""), "x": list(s["x"]), "y": list(s["y"]), "color": s.get("color"),
            "xi": s.get("xi")} for s in pred["series"]]
-    p, r, f = metrics.rms(gt_view(gt), ps)
-    rec.update(rms_p=p, rms_r=r, rms_f1=f, rmsn_f1=rms_noname(gt_view(gt), ps)[2])
+    gv = gt_view(gt)
+    if positional(it):
+        gv, ps = to_positional(gv), to_positional(ps)
+        rec["positional"] = True
+    p, r, f = metrics.rms(gv, ps)
+    rec.update(rms_p=p, rms_r=r, rms_f1=f, rmsn_f1=rms_noname(gv, ps)[2])
     if it["ds"] == "synth":
         if gt["type"] == "scatter":
             rec["point_f1"] = point_f1(gt, pred)
@@ -173,6 +199,9 @@ def run_deplot(items, out):
 def main():
     mode, k, n, out = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), sys.argv[4]
     items = datasets.load()
+    only = os.environ.get("CHARTS_ONLY_DS")
+    if only:
+        items = [it for it in items if it["ds"] == only]
     if mode == "ours":
         run_ours(shard(items, k, n), out)
     else:
