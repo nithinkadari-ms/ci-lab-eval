@@ -282,6 +282,16 @@ CAP_JOB = int(os.environ.get("DOCRES_CAP", "2"))
 FORCED_JOB = int(os.environ.get("DOCRES_FORCED", "2"))
 
 
+def keep_page(p, step):
+    """stratified sample: synthetic base documents with all eight degradations (paired across defects), FUNSD and
+    SROIE by a hash of the page id. (Taking every n-th page of the list aliased with the 8 degradations per base
+    document and kept only two defect types.)"""
+    import hashlib
+    if p["ds"] == "synth":
+        return int(p["id"].split(":")[1]) % step == 0
+    return int(hashlib.md5(p["id"].encode()).hexdigest()[:8], 16) % step == 0
+
+
 def crop_gt(words, boxes, keep):
     owner = run_ocr.assign(words, boxes)
     gt_by = {}
@@ -305,7 +315,7 @@ def main():
     k, n, out = int(sys.argv[1]), int(sys.argv[2]), sys.argv[3]
     pages = data.all_pages()
     step = 8 if GROUP == "unirec" else 4
-    sub = [p for i, p in enumerate(pages) if i % step == 0]
+    sub = [p for p in pages if keep_page(p, step)]
     mine = [p for i, p in enumerate(sub) if i % n == k]
     info = {"group": GROUP, "rss_start": rss_mb()}
     det = ppocr.Detector(engines.P["det_s"])
