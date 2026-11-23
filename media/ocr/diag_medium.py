@@ -67,8 +67,9 @@ def pieces(rgb, maxw=640):
 
 def main():
     out = sys.argv[1]
-    pages = [p for p in data.all_pages() if p["ds"] == "synth" and p["defect"] in ("lowdpi", "curved", "clean")
-             and int(p["id"].split(":")[1]) % 40 == 0]
+    # report and tiny-print templates (base % 5 in {2, 4}) carry the long lines; lowdpi and curved showed the gap
+    pages = [p for p in data.all_pages() if p["ds"] == "synth" and p["defect"] in ("lowdpi", "curved")
+             and int(p["id"].split(":")[1]) in (2, 4, 7, 9, 12, 14, 17, 19)]
     det = ppocr.Detector(engines.P["det_s"])
     eng = engines.build(["v6s", "v6m"])
     stats, worst, n_steps = {}, [], {}
@@ -91,7 +92,7 @@ def main():
             b = "<=320" if w48 <= 320 else "<=640" if w48 <= 640 else "<=1280" if w48 <= 1280 else ">1280"
             res = {}
             for m in ("v6s", "v6m"):
-                for v in ("docling", "bgr", "pil"):
+                for v in ("docling", "bgr"):
                     t, T = read(eng[m], c, v)
                     res[(m, v)] = t
                     n_steps[(m, b)] = T
