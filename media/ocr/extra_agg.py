@@ -180,6 +180,20 @@ def main():
         P(f"| + UnionST second reader | {h['cer']:.4f} | {h['wer']:.4f} | {h['num']:.4f} | {w} / {l} | {pfmt(pv)} | "
           f"[{lo:+.4f}, {hi:+.4f}] |")
         P()
+    if best:
+        P("Second reader per slice (test split, same threshold): CER v6s -> v6s + UnionST re-read")
+        P()
+        P("| slice | v6s CER | + second reader CER | docs better / worse |")
+        P("|---|---|---|---|")
+        for name, f in slices:
+            ts = [p for p in test if f(p)]
+            if not ts:
+                continue
+            b_ = crop_stats(ts, "v6s")
+            h_ = crop_stats(ts, None, pick)
+            w_, l_, _ = sign_test([b_["grp"][g] - h_["grp"][g] for g in b_["grp"] if g in h_["grp"]])
+            P(f"| {name} | {b_['cer']:.4f} | {h_['cer']:.4f} | {w_} / {l_} |")
+        P()
     P("### DocRes as gated cleanup (page CER end to end, PP-OCRv6 small det+rec)")
     P()
     P("| case | pages | CER without | CER with DocRes | pages better / worse | median DocRes s/page |")

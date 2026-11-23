@@ -1,7 +1,7 @@
 # Round 4 media tests (repo 2, media/)
 
 Status, 2026-11-21: this file holds the parts that have finished.
-- Gap 1 is complete. The extra-challenger per-defect tables will be replaced by a stratified rerun (45152123157).
+- Gap 1 is complete, including the stratified extra-challenger rerun (45152123157).
 - Datasets and weights were downloaded inside the jobs and never committed.
 
 ## Word formulas: real Word / Cambria Math
@@ -363,116 +363,152 @@ Generated flattened forms (test templates):
 ## OCR: extra challengers
 
 Tests only.
-- **Run:** 45140140168 (`ocr-extra-r4.yml`), 14 jobs, all green.
-- **Per-item files checked:** 693 pages, 31,685 line crops, 0 page errors.
-  - UnionST: 693 pages with every arm (v6s, whole line, word-split, second-reader merge).
-  - UniRec: 347 pages.
-  - DocRes: 36 gated or forced pages.
-  - Crop counts match between jobs; PP-OCRv6 medium on the same crops was matched for 635 pages.
-- **Sampling flaw (preliminary results):** taking every 4th (8th) page of the page list aliased with the 8 degradations per synthetic base document. The synthetic part therefore holds only the `lowdpi` and `curved` pages (UniRec: only `curved`), and DocRes never saw blurred, faded or noisy pages.
-- A stratified rerun (all 8 degradations of every 4th / 8th base document) replaces the per-defect tables when it reports. The overall conclusions below are unlikely to change: every challenger loses to PP-OCRv6 small on almost every document.
-- **Models and memory:**
-  - UnionST-SP: 97.6 MB, MIT per the card but no LICENSE file; OpenOCR code Apache-2.0. Process RSS 1.71 GB with PP-OCRv6 small.
-  - UniRec-0.1B: ONNX fp32, 719 MB, Apache card; 1.99 GB RSS.
-  - DocRes: 183 MB, MIT code, tiled float32 on CPU; 1.63 GB RSS.
-  - CPU per line crop (4 threads): v6s 24 ms, UnionST line 65 ms, UnionST word-split 173 ms, UniRec 357 ms. DocRes 141-425 s per page.
 
-Same pages and the same PP-OCRv6 small detector crops as the main OCR test (UnionST and DocRes: every 4th page; UniRec: every 8th page). Pages with records: 693, line crops: 31685, page errors 0, crop-count mismatches between jobs 0. PP-OCRv6 medium on the same crops is taken from the main OCR records (635 pages matched). Paired tests per document; only the second-reader threshold is tuned (dev split).
+**Run:** 45152123157 (`ocr-extra-r4.yml`), stratified sample.
+- Synthetic: every 4th base document (every 8th for UniRec) with all 8 degradations. FUNSD and SROIE pages sampled by id hash.
+- 14 of 15 jobs succeeded.
+- **Missing DocRes shard:** `extra (docres, 2, 6)` hit the 170-minute limit and was not rerun; DocRes is rejected regardless.
+  - So the DocRes table covers 5 of 6 shards: 590 gate-checked pages, 64 DocRes runs.
+  - Gate-firing rates are over those pages.
 
-- docres: rss_start 1103.1, rss_ppocr 1162.6, docres_mb 183.3, rss_model 1633.4
-- unionst: rss_start 1090.4, rss_ppocr 1148.2, unionst_missing_keys 0, unionst_mb 97.6, rss_model 1711.1
-- unirec: rss_start 1084.0, rss_ppocr 1141.5, unirec_mb 719.1, rss_model 1990.9
+**Per-item files checked (good jobs):**
+- 708 pages, 33,065 line crops, 0 errors.
+- UnionST: 708 pages with every arm (v6s, whole line, word-split, second-reader merge). UniRec: 346 pages.
+- Crop counts identical between jobs.
+- PP-OCRv6 medium on the same crops was taken from the merged main OCR records (708 of 708 pages matched; re-aggregated with the completed main run).
+
+**Models and resources:**
+- UnionST-SP: 97.6 MB, MIT card, no LICENSE file; OpenOCR code Apache-2.0. Process RSS 1.61 GB.
+- UniRec-0.1B: ONNX fp32, 719 MB, Apache card. RSS 2.04 GB.
+- DocRes: 183 MB, MIT; tiled float32 on CPU. RSS 1.61 GB.
+- CPU per line crop (4 threads): v6s 30 ms, UnionST line 70 ms, UnionST word-split 224 ms, UniRec 411 ms. DocRes 90-484 s per page.
+
+Same pages and the same PP-OCRv6 small detector crops as the main OCR test (UnionST and DocRes: every 4th page; UniRec: every 8th page). Pages with records: 708, line crops: 33065, page errors 0, crop-count mismatches between jobs 0. PP-OCRv6 medium on the same crops is taken from the main OCR records (708 pages matched). Paired tests per document; only the second-reader threshold is tuned (dev split).
+
+- docres: rss_start 1077.2, rss_ppocr 1138.2, docres_mb 183.3, rss_model 1608.7
+- unionst: rss_start 1088.8, rss_ppocr 1148.4, unionst_missing_keys 0, unionst_mb 97.6, rss_model 1614.6
+- unirec: rss_start 1087.5, rss_ppocr 1148.5, unirec_mb 719.1, rss_model 2038.4
 
 ### Same crops: CER / WER / numeric-token exact
 
 | slice | chars | v6s | v6m | unionst_line | unionst_words | unirec subset: v6s | v6m | unirec |
 |---|---|---|---|---|---|---|---|---|
-| all | 1057503 | 0.117 / 0.168 / 0.895 | 0.226 / 0.274 / 0.887 | 0.678 / 0.935 / 0.459 | 0.300 / 0.485 / 0.763 | 0.229 / 0.288 / 0.890 | 0.368 / 0.409 / 0.879 | 0.370 / 0.299 / 0.802 |
-| funsd | 44883 | 0.068 / 0.277 / 0.455 | 0.070 / 0.272 / 0.462 | 0.414 / 0.924 / 0.161 | 0.223 / 0.622 / 0.336 | 0.074 / 0.275 / 0.461 | 0.073 / 0.276 / 0.469 | 0.108 / 0.333 / 0.416 |
-| sroie | 98147 | 0.264 / 0.403 / 0.867 | 0.262 / 0.388 / 0.891 | 0.399 / 0.835 / 0.424 | 0.294 / 0.544 / 0.777 | 0.272 / 0.407 / 0.878 | 0.271 / 0.397 / 0.893 | 0.474 / 0.514 / 0.753 |
-| synth | 914473 | 0.104 / 0.129 / 0.971 | 0.230 / 0.256 / 0.949 | 0.720 / 0.950 / 0.521 | 0.304 / 0.469 / 0.812 | 0.234 / 0.269 / 0.956 | 0.405 / 0.424 / 0.933 | 0.373 / 0.258 / 0.885 |
-| synth:lowdpi | 557037 | 0.021 / 0.039 / 0.985 | 0.115 / 0.144 / 0.965 | 0.752 / 0.959 / 0.507 | 0.176 / 0.350 / 0.838 | - | - | - |
-| synth:curved | 357436 | 0.234 / 0.269 / 0.956 | 0.405 / 0.424 / 0.933 | 0.671 / 0.936 / 0.535 | 0.504 / 0.652 / 0.786 | 0.234 / 0.269 / 0.956 | 0.405 / 0.424 / 0.933 | 0.373 / 0.258 / 0.885 |
+| all | 1209049 | 0.110 / 0.156 / 0.893 | 0.154 / 0.206 / 0.899 | 0.726 / 0.940 / 0.460 | 0.267 / 0.484 / 0.768 | 0.112 / 0.157 / 0.892 | 0.143 / 0.190 / 0.899 | 0.141 / 0.194 / 0.813 |
+| funsd | 48372 | 0.049 / 0.224 / 0.537 | 0.057 / 0.222 / 0.540 | 0.456 / 0.916 / 0.226 | 0.217 / 0.585 / 0.410 | 0.047 / 0.220 / 0.536 | 0.046 / 0.210 / 0.537 | 0.129 / 0.275 / 0.517 |
+| sroie | 107263 | 0.254 / 0.390 / 0.872 | 0.251 / 0.372 / 0.896 | 0.388 / 0.828 / 0.433 | 0.282 / 0.522 / 0.795 | 0.248 / 0.382 / 0.874 | 0.245 / 0.363 / 0.896 | 0.333 / 0.460 / 0.751 |
+| synth | 1053414 | 0.098 / 0.121 / 0.958 | 0.148 / 0.183 / 0.951 | 0.773 / 0.956 / 0.511 | 0.268 / 0.473 / 0.800 | 0.103 / 0.127 / 0.950 | 0.138 / 0.168 / 0.948 | 0.125 / 0.159 / 0.888 |
+| synth:clean | 138201 | 0.000 / 0.002 / 0.988 | 0.000 / 0.002 / 0.991 | 0.762 / 0.958 / 0.507 | 0.020 / 0.119 / 0.894 | 0.000 / 0.002 / 0.987 | 0.000 / 0.002 / 0.990 | 0.010 / 0.057 / 0.931 |
+| synth:lowdpi | 138198 | 0.001 / 0.006 / 0.986 | 0.070 / 0.101 / 0.967 | 0.772 / 0.958 / 0.509 | 0.145 / 0.396 / 0.815 | 0.001 / 0.005 / 0.977 | 0.018 / 0.041 / 0.962 | 0.008 / 0.030 / 0.861 |
+| synth:blur | 138052 | 0.003 / 0.016 / 0.982 | 0.122 / 0.170 / 0.964 | 0.786 / 0.958 / 0.506 | 0.481 / 0.645 / 0.751 | 0.005 / 0.023 / 0.975 | 0.107 / 0.146 / 0.962 | 0.016 / 0.040 / 0.929 |
+| synth:noise | 138200 | 0.004 / 0.036 / 0.978 | 0.001 / 0.009 / 0.989 | 0.763 / 0.958 / 0.507 | 0.153 / 0.671 / 0.688 | 0.005 / 0.041 / 0.977 | 0.001 / 0.010 / 0.985 | 0.011 / 0.064 / 0.913 |
+| synth:skew | 138476 | 0.569 / 0.660 / 0.831 | 0.570 / 0.663 / 0.830 | 0.824 / 0.960 / 0.507 | 0.596 / 0.752 / 0.758 | 0.585 / 0.673 / 0.814 | 0.586 / 0.674 / 0.814 | 0.619 / 0.708 / 0.746 |
+| synth:curved | 85887 | 0.266 / 0.292 / 0.952 | 0.419 / 0.439 / 0.935 | 0.702 / 0.934 / 0.538 | 0.546 / 0.702 / 0.789 | 0.274 / 0.299 / 0.941 | 0.432 / 0.455 / 0.928 | 0.348 / 0.301 / 0.866 |
+| synth:jpeg | 138199 | 0.003 / 0.022 / 0.953 | 0.106 / 0.172 / 0.943 | 0.784 / 0.958 / 0.509 | 0.296 / 0.498 / 0.810 | 0.003 / 0.021 / 0.936 | 0.047 / 0.106 / 0.950 | 0.043 / 0.061 / 0.924 |
+| synth:faded | 138201 | 0.000 / 0.001 / 0.992 | 0.000 / 0.002 / 0.987 | 0.762 / 0.958 / 0.507 | 0.010 / 0.089 / 0.895 | 0.000 / 0.002 / 0.990 | 0.000 / 0.002 / 0.988 | 0.010 / 0.051 / 0.936 |
 
 Paired per-document CER vs PP-OCRv6 small and medium (wins = challenger lower CER):
 
 | slice | challenger | baseline | docs | wins | losses | p | mean CER reduction 95% CI |
 |---|---|---|---|---|---|---|---|
-| all | unionst_line | v6s | 453 | 1 | 452 | 3.9e-134 | [-0.2807, -0.2353] |
-| all | unionst_line | v6m | 437 | 1 | 436 | 2.5e-129 | [-0.2465, -0.2076] |
-| all | unionst_words | v6s | 453 | 12 | 415 | 3.9e-106 | [-0.0859, -0.0637] |
-| all | unionst_words | v6m | 437 | 15 | 394 | 1.4e-96 | [-0.0577, -0.0444] |
-| all | unirec | v6s | 347 | 61 | 241 | 1.8e-26 | [-0.2397, -0.0643] |
-| all | unirec | v6m | 319 | 76 | 211 | 7.4e-16 | [-0.1742, -0.0018] |
-| funsd | unionst_line | v6s | 50 | 1 | 49 | 9.1e-14 | [-0.3745, -0.2817] |
-| funsd | unionst_line | v6m | 50 | 1 | 49 | 9.1e-14 | [-0.3716, -0.2844] |
-| funsd | unionst_words | v6s | 50 | 1 | 49 | 9.1e-14 | [-0.1816, -0.1107] |
-| funsd | unionst_words | v6m | 50 | 1 | 49 | 9.1e-14 | [-0.1777, -0.1172] |
-| funsd | unirec | v6s | 25 | 1 | 23 | 3.0e-06 | [-0.0452, -0.0231] |
-| funsd | unirec | v6m | 25 | 4 | 21 | 9.1e-04 | [-0.0626, -0.0164] |
-| sroie | unionst_line | v6s | 163 | 0 | 163 | 1.7e-49 | [-0.1406, -0.1258] |
-| sroie | unionst_line | v6m | 163 | 0 | 163 | 1.7e-49 | [-0.1429, -0.1281] |
-| sroie | unionst_words | v6s | 163 | 11 | 149 | 4.6e-32 | [-0.0353, -0.0252] |
-| sroie | unionst_words | v6m | 163 | 8 | 153 | 6.8e-36 | [-0.0377, -0.0275] |
-| sroie | unirec | v6s | 82 | 2 | 79 | 2.7e-21 | [-0.5393, -0.0358] |
-| sroie | unirec | v6m | 82 | 2 | 79 | 2.7e-21 | [-0.5410, -0.0367] |
-| synth | unionst_line | v6s | 240 | 0 | 240 | 1.1e-72 | [-0.3679, -0.2890] |
-| synth | unionst_line | v6m | 224 | 0 | 224 | 7.4e-68 | [-0.3053, -0.2370] |
-| synth | unionst_words | v6s | 240 | 0 | 217 | 9.5e-66 | [-0.1077, -0.0707] |
-| synth | unionst_words | v6m | 224 | 6 | 192 | 4.0e-49 | [-0.0517, -0.0350] |
-| synth | unirec | v6s | 240 | 58 | 139 | 7.4e-09 | [-0.2137, -0.0424] |
-| synth | unirec | v6m | 212 | 70 | 111 | 0.003 | [-0.1116, +0.0501] |
+| all | unionst_line | v6s | 288 | 0 | 288 | 4.0e-87 | [-0.2428, -0.1987] |
+| all | unionst_line | v6m | 288 | 0 | 288 | 4.0e-87 | [-0.2385, -0.1966] |
+| all | unionst_words | v6s | 288 | 20 | 267 | 2.6e-56 | [-0.0727, -0.0534] |
+| all | unionst_words | v6m | 288 | 11 | 273 | 1.3e-66 | [-0.0683, -0.0515] |
+| all | unirec | v6s | 136 | 9 | 121 | 3.5e-26 | [-0.1066, -0.0372] |
+| all | unirec | v6m | 136 | 15 | 119 | 2.9e-21 | [-0.1058, -0.0359] |
+| funsd | unionst_line | v6s | 54 | 0 | 54 | 1.1e-16 | [-0.4101, -0.3230] |
+| funsd | unionst_line | v6m | 54 | 0 | 54 | 1.1e-16 | [-0.4055, -0.3147] |
+| funsd | unionst_words | v6s | 54 | 0 | 54 | 1.1e-16 | [-0.1844, -0.1232] |
+| funsd | unionst_words | v6m | 54 | 0 | 54 | 1.1e-16 | [-0.1766, -0.1189] |
+| funsd | unirec | v6s | 24 | 0 | 24 | 1.2e-07 | [-0.1343, -0.0233] |
+| funsd | unirec | v6m | 24 | 1 | 23 | 3.0e-06 | [-0.1360, -0.0243] |
+| sroie | unionst_line | v6s | 174 | 0 | 174 | 8.4e-53 | [-0.1392, -0.1257] |
+| sroie | unionst_line | v6m | 174 | 0 | 174 | 8.4e-53 | [-0.1420, -0.1285] |
+| sroie | unionst_words | v6s | 174 | 20 | 153 | 1.5e-26 | [-0.0319, -0.0233] |
+| sroie | unionst_words | v6m | 174 | 10 | 160 | 6.0e-36 | [-0.0346, -0.0262] |
+| sroie | unirec | v6s | 82 | 5 | 73 | 1.5e-16 | [-0.1393, -0.0354] |
+| sroie | unirec | v6m | 82 | 5 | 76 | 2.3e-17 | [-0.1428, -0.0382] |
+| synth | unionst_line | v6s | 60 | 0 | 60 | 1.7e-18 | [-0.4267, -0.2643] |
+| synth | unionst_line | v6m | 60 | 0 | 60 | 1.7e-18 | [-0.4035, -0.2521] |
+| synth | unionst_words | v6s | 60 | 0 | 60 | 1.7e-18 | [-0.1103, -0.0603] |
+| synth | unionst_words | v6m | 60 | 1 | 59 | 1.1e-16 | [-0.0840, -0.0504] |
+| synth | unirec | v6s | 30 | 4 | 24 | 1.8e-04 | [-0.0741, -0.0106] |
+| synth | unirec | v6m | 30 | 9 | 20 | 0.061 | [-0.0641, +0.0068] |
 
 ### UnionST on long lines (word-level model, max 25 characters, input squeezed to at most 128 x 32)
 
 | GT line length (chars) | crops | v6s CER | UnionST whole line CER | UnionST word-split CER |
 |---|---|---|---|---|
-| 1-10 | 11949 | 0.088 | 0.121 | 0.124 |
-| 11-25 | 8223 | 0.097 | 0.189 | 0.127 |
-| 26-50 | 4910 | 0.081 | 0.384 | 0.123 |
-| 51-100 | 2987 | 0.070 | 0.825 | 0.268 |
-| 101-+ | 3127 | 0.164 | 0.949 | 0.460 |
+| 1-10 | 12754 | 0.135 | 0.129 | 0.173 |
+| 11-25 | 8395 | 0.106 | 0.195 | 0.144 |
+| 26-50 | 3963 | 0.127 | 0.364 | 0.171 |
+| 51-100 | 3141 | 0.068 | 0.856 | 0.200 |
+| 101-+ | 4151 | 0.120 | 0.941 | 0.352 |
 
 ### UnionST as a second reader on low-confidence PP-OCRv6 small lines
 
-Threshold from the dev split: re-read the lowest 10% confidence lines (conf <= 0.973); on the test split 9.5% of lines were re-read. Merge: word alignment by edit distance; a token with digits is only changed when both readers agree.
+Threshold from the dev split: re-read the lowest 10% confidence lines (conf <= 0.972); on the test split 8.0% of lines were re-read. Merge: word alignment by edit distance; a token with digits is only changed when both readers agree.
 
 | test split | CER | WER | numeric exact | docs better / worse | p | CI |
 |---|---|---|---|---|---|---|
-| PP-OCRv6 small | 0.1115 | 0.1618 | 0.8900 | - | - | - |
-| + UnionST second reader | 0.1117 | 0.1621 | 0.8900 | 33 / 51 | 0.063 | [-0.0007, -0.0000] |
+| PP-OCRv6 small | 0.0973 | 0.1387 | 0.9030 | - | - | - |
+| + UnionST second reader | 0.0974 | 0.1392 | 0.9030 | 31 / 54 | 0.017 | [-0.0012, -0.0003] |
+
+Second reader per slice (test split, same threshold): CER v6s -> v6s + UnionST re-read
+
+| slice | v6s CER | + second reader CER | docs better / worse |
+|---|---|---|---|
+| all | 0.0973 | 0.0974 | 31 / 54 |
+| funsd | 0.0448 | 0.0476 | 7 / 10 |
+| sroie | 0.2469 | 0.2472 | 22 / 38 |
+| synth | 0.0843 | 0.0844 | 2 / 6 |
+| synth:clean | 0.0001 | 0.0001 | 0 / 2 |
+| synth:lowdpi | 0.0007 | 0.0008 | 0 / 2 |
+| synth:blur | 0.0026 | 0.0027 | 0 / 3 |
+| synth:noise | 0.0031 | 0.0030 | 2 / 2 |
+| synth:skew | 0.4724 | 0.4725 | 0 / 5 |
+| synth:curved | 0.2532 | 0.2531 | 1 / 4 |
+| synth:jpeg | 0.0027 | 0.0028 | 0 / 2 |
+| synth:faded | 0.0000 | 0.0001 | 0 / 1 |
 
 ### DocRes as gated cleanup (page CER end to end, PP-OCRv6 small det+rec)
 
 | case | pages | CER without | CER with DocRes | pages better / worse | median DocRes s/page |
 |---|---|---|---|---|---|
-| gate: appearance on funsd:real_scan | 10 | 0.0736 | 0.0733 | 5 / 5 | 144.5 |
-| gate: appearance on sroie:receipt | 10 | 0.2680 | 0.2649 | 5 / 2 | 177.7 |
-| gate: appearance on synth:curved | 6 | 0.6165 | 0.6255 | 2 / 1 | 425.0 |
-| gate: appearance on synth:lowdpi | 6 | 0.0043 | 0.0045 | 0 / 1 | 141.0 |
-| gate: deshadowing on funsd:real_scan | 2 | 0.1167 | 0.1184 | 0 / 1 | 141.9 |
-| gate: deshadowing on sroie:receipt | 2 | 0.2205 | 0.2177 | 1 / 1 | 295.9 |
+| forced on clean pages (gate did not fire) | 4 | 0.0000 | 0.0061 | 0 / 1 | 483.7 |
+| gate: appearance on funsd:real_scan | 9 | 0.0495 | 0.0497 | 5 / 3 | 91.2 |
+| gate: appearance on sroie:receipt | 9 | 0.2447 | 0.2434 | 2 / 6 | 181.7 |
+| gate: appearance on synth:clean | 4 | 0.0004 | 0.0004 | 0 / 0 | 307.5 |
+| gate: appearance on synth:curved | 6 | 0.6631 | 0.6589 | 3 / 2 | 303.0 |
+| gate: appearance on synth:faded | 4 | 0.0003 | 0.0003 | 0 / 0 | 301.3 |
+| gate: appearance on synth:jpeg | 4 | 0.0043 | 0.0032 | 1 / 0 | 190.0 |
+| gate: appearance on synth:lowdpi | 6 | 0.0043 | 0.0045 | 0 / 1 | 90.4 |
+| gate: appearance on synth:noise | 6 | 0.0063 | 0.0073 | 0 / 2 | 293.7 |
+| gate: appearance on synth:skew | 4 | 0.5535 | 0.5614 | 0 / 3 | 469.7 |
+| gate: deblurring on synth:blur | 4 | 0.0005 | 0.0014 | 0 / 1 | 467.4 |
+| gate: deblurring on synth:faded | 2 | 0.0000 | 0.0000 | 0 / 0 | 474.2 |
+| gate: deshadowing on funsd:real_scan | 1 | 0.0836 | 0.0836 | 0 / 0 | 89.9 |
+| gate: deshadowing on sroie:receipt | 1 | 0.2733 | 0.2632 | 1 / 0 | 136.6 |
 
-Gate firing rate by page type: curved 164/240, lowdpi 155/240, real_scan 28/50, receipt 95/163
+Gate firing rate by page type: blur 36/60, clean 28/60, curved 42/60, faded 60/60, jpeg 26/60, lowdpi 39/60, noise 39/60, real_scan 23/54, receipt 81/174, skew 28/60
 
 ### CPU time on the same crops (ms per line crop, 4 threads, shared runner)
 
-v6s: 24.4, unionst_line: 64.8, unionst_words: 172.7, unirec: 356.5
+v6s: 30.1, unionst_line: 69.9, unionst_words: 223.7, unirec: 410.5
 
-**Verdict, extra challengers:**
-- **UnionST-SP (word-level scene model):** not usable as a line recognizer.
-  - Whole lines: CER 0.678 vs 0.117 for v6s; it loses on 452 of 453 documents. Lines over 25 characters collapse (CER 0.38-0.95), as its config implies.
-  - Word-split crops: much better (0.300) but still clearly worse than v6s and v6m (12 wins / 415 losses vs v6s, p = 4e-106).
-  - As a second reader on the lowest-confidence 10% of lines (digit tokens change only if both readers agree): no gain. CER 0.1117 vs 0.1115, numeric exact unchanged at 0.890, 33 better / 51 worse documents, p = 0.063.
-  - Reject.
-- **UniRec-0.1B fp32 (text crops):** worse than both PP-OCRv6 sizes.
-  - CER 0.370 vs v6s 0.229 and v6m 0.368 on its own crops; 61 wins / 241 losses vs v6s, p = 2e-26. Receipts are much worse (0.474 vs 0.272).
-  - It is 15x slower than v6s and 719 MB. Reject.
-- **DocRes, gated:** no measurable benefit on the pages where the gate fired.
-  - Receipts: 0.268 to 0.265. FUNSD: 0.074 to 0.073. Curved: 0.617 to 0.626, worse.
-  - 141-425 s per page on CPU. Reject.
-  - The gate fires on many normal pages (lowdpi 155 of 240, curved 164 of 240), so as configured it would mostly cost time.
-- **PP-OCRv6 small stays the best line recognizer** on these crops: CER 0.117, WER 0.168, numeric exact 0.895. Medium on the same crops: 0.226 / 0.274 / 0.887. The full medium-vs-small comparison comes from the main OCR test.
+**Verdict, extra challengers** (unchanged from the preliminary run; now holds on all 8 defect types):
+- **UnionST-SP: reject.**
+  - Whole lines: CER 0.726 vs 0.110; 0 wins on 288 documents.
+  - Word-split: 0.267, worse on every defect type (e.g. blur 0.481 vs 0.003; JPEG 0.296 vs 0.003).
+  - Second reader on the lowest-confidence 8-10% of lines: CER 0.0974 vs 0.0973, 31 better / 54 worse (p = 0.017, against it). Numeric exact unchanged (0.903).
+- **UniRec-0.1B fp32: reject.**
+  - On its own crops: 0.141 vs v6s 0.112 (9 / 121 documents, p = 4e-26). Better than v6m on blur, JPEG and curved, but never better than v6s.
+  - 14x slower and 719 MB.
+- **DocRes, gated: reject.**
+  - No reliable gain: deblurring made blur pages worse (0.0005 to 0.0014); appearance changes were within ±0.01; on wrongly gated clean pages it added errors (0 to 0.006).
+  - The gate fires on most pages (faded 60 of 60, curved 42 of 60, even clean 28 of 60).
+  - 1.5-8 minutes per page on CPU.
+- **PP-OCRv6 small stays the pick.**
 
 ## Gap 1. OCR on scanned English documents
 
