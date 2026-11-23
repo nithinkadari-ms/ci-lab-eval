@@ -1,7 +1,7 @@
 # Round 4 media tests (repo 2, media/)
 
 Status, 2026-11-21: this file holds the parts that have finished.
-- Still being re-run: OCR (gap 1), PlotQA scoring for charts (gap 2), forms + FFDetr (gap 3) and the LibreOffice route for Word formulas. Their sections are added when they finish (workflow `media-r4.yml`).
+- Still being re-run: OCR (gap 1: completion run and extra challengers). Their sections are added when they finish (workflow `media-r4.yml`).
 - Datasets and weights were downloaded inside the jobs and never committed.
 
 ## Word formulas: real Word / Cambria Math
@@ -157,6 +157,11 @@ Abstention reasons (vector): no marks: 54, no series: 24, bars without a calibra
 | synth | 200 | 0.327 | 0.546 | 0.890 | 103 | 61 | 0.001 | 48.7 |
 | chartx | 250 | 0.693 | 0.356 | 0.768 | 42 | 193 | 2.6e-24 | 45.8 |
 
+**PlotQA (re-scored in run 44920588794; 0 errors: 604 scored + 396 abstained for ours, 250 for DePlot):**
+- Even keyed by point position, every method stays near zero: DePlot RMS-F1 0.069, ours 0.002 (names ignored 0.072).
+- DePlot was trained on PlotQA, so this means the achang/plot_qa repack's value encoding does not match what the rendered charts show. Its x values are indices, and its y values are raw source numbers while the axes show scaled ticks.
+- **PlotQA is therefore excluded as unusable ground truth.** The raster verdict rests on ChartX and the synthetic set.
+
 **Verdict, gap 2:**
 - **Vector charts (ChartDetective-style, our code): adopt for bar-type charts.**
   - Bar, grouped, stacked, horizontal and negative bars: coverage 85-100%, RMS-F1 0.70-0.94, 78-99% of points within 1%. About 11 ms per chart, no model.
@@ -170,3 +175,212 @@ Abstention reasons (vector): no marks: 54, no series: 24, bars without a calibra
   - Worse on our synthetic charts (0.327 vs 0.546), since it doesn't output our series and keys.
   - Too large and slow to ship. It remains an offline reference.
 - **Recommendation:** ship vector extraction for bars now, with an abstain path. Fix line legends, scatter markers and log axes, then re-test. For raster charts, keep the image plus caption and expose no numbers (or only flagged low-confidence ones).
+
+## Word formulas: DOCX (OMML) and the LibreOffice PDF route
+
+751 equations (31 hand-written OMML with hand LaTeX, the rest generated from one AST into OMML + gold LaTeX + gold MathML). easydoc-math scored by normalised LaTeX against the gold forms; omml2mml.xsl scored by canonical MathML skeleton (generated cases only, hand cases have no MathML gold); PDF route = LibreOffice export + round-3 glyph logic.
+
+| construct | n | easydoc-math exact | easydoc errors | omml2mml.xsl skeleton exact | PDF glyph rebuild exact |
+|---|---|---|---|---|---|
+| fraction | 43 | 0.372 | 0 | 0.850 | 0.628 |
+| binomial | 41 | 0.902 | 0 | 0.975 | 0.000 |
+| superscript | 41 | 0.439 | 0 | 0.975 | 0.659 |
+| subscript | 41 | 0.341 | 0 | 0.975 | 0.561 |
+| subsup | 41 | 0.756 | 0 | 1.000 | 0.756 |
+| prescript | 41 | 0.000 | 0 | 0.975 | 0.683 |
+| nary | 43 | 0.349 | 0 | 1.000 | 0.535 |
+| radical | 42 | 0.643 | 0 | 0.425 | 0.381 |
+| matrix | 43 | 0.698 | 0 | 0.975 | 0.047 |
+| eqarray | 41 | 0.244 | 0 | 0.875 | 0.390 |
+| accent | 44 | 1.000 | 0 | 1.000 | 0.750 |
+| bar | 42 | 0.929 | 0 | 0.975 | 0.381 |
+| delimiter | 42 | 0.405 | 0 | 0.975 | 0.667 |
+| function | 42 | 0.881 | 0 | 1.000 | 0.929 |
+| limit | 41 | 0.000 | 0 | 0.900 | 0.146 |
+| underbrace | 41 | 0.488 | 0 | 0.950 | 0.000 |
+| eqnumber | 41 | 0.000 | 0 | 1.000 | 0.000 |
+| nested | 41 | 0.854 | 0 | 0.000 | 0.634 |
+| **all** | 751 | **0.519** | 0 | **0.879** | **0.454** |
+
+Hand-written cases only: easydoc-math 23/31, PDF route 20/31.
+Equation numbers kept: easydoc-math 41/41, omml2mml.xsl 40/41, PDF route 0/41.
+easydoc-math vs omml2mml.xsl on the same 720 generated equations: easydoc right and XSLT wrong 50, the reverse 316, sign test p = 2.3e-48 (different output formats, see method).
+PDF fonts seen in equation regions: LiberationSerif-Italic (705), OpenSymbol (622), LiberationSerif (569).
+LibreOffice export 1.0 s per 25-equation DOCX.
+Speed: easydoc-math 85 us/equation in the Rust binary (process total 0.07 s for 751); XSLT 0.35 ms/equation.
+
+Notes:
+- The PDF column uses LibreOffice's math fonts (LiberationSerif, OpenSymbol), not Cambria Math, and is not used for decisions; see the real-Word section above.
+- From the DOCX XML itself:
+  - omml2mml.xsl (BSD-2) reproduces the MathML structure for 87.9% of generated equations;
+  - easydoc-math 0.1.2 gets 51.9% exact LaTeX: weak on prescripts, limits and equation numbers (0%), and on fractions with scripts.
+- **Pick:** for DOCX input, read OMML with the XSLT-style mapping (or port its rules to Rust) rather than easydoc-math as it stands.
+
+## Gap 3. Forms without fillable fields
+
+**Run:** 44898133792 (`media-r4.yml`, part=nocharts); the `forms` and `ffdetr` jobs succeeded.
+
+**Inputs checked:**
+- `run_forms.py` and `ffdetr_match.py` run their own PP-OCRv6 small detection + recognition on the FUNSD and generated-form images inside the forms job.
+- They do not use the `ocr-pages` outputs, so the timed-out OCR jobs do not affect these numbers.
+
+### 3a. Label -> value matcher (FUNSD test, 50 forms, PP-OCRv6 small boxes)
+
+OCR lines: 2566; mapped to an entity: 2444; question->answer links: 837; blank questions: 477. Thresholds picked on half of the training forms: geo -1.25, geo_lilt -1.00.
+
+| method | pair P | pair R | pair F1 | exact value P / R | blanks wrongly filled | repeated-label P / R |
+|---|---|---|---|---|---|---|
+| nn | 0.485 | 0.302 | 0.372 | 0.241 / 0.151 | 0.203 | 0.448 / 0.184 |
+| nn_lilt | 0.554 | 0.432 | 0.486 | 0.291 / 0.227 | 0.203 | 0.766 / 0.322 |
+| geo | 0.524 | 0.397 | 0.452 | 0.259 / 0.196 | 0.136 | 0.636 / 0.294 |
+| geo_lilt | 0.820 | 0.450 | 0.581 | 0.422 / 0.232 | 0.055 | 0.931 / 0.373 |
+
+Paired per-form F1 (sign test):
+
+| A vs B | A better | B better | p |
+|---|---|---|---|
+| geo vs nn | 32 | 10 | 9.4e-04 |
+| geo vs nn_lilt | 20 | 24 | 0.652 |
+| geo_lilt vs geo | 36 | 8 | 2.5e-05 |
+| geo_lilt vs nn_lilt | 38 | 7 | 3.1e-06 |
+
+Time: OCR 1.50 s/form; LiLT 0.23 s/form (CPU, 521 MB fp32 checkpoint); geometry matcher < 5 ms/form.
+
+EC-FUNSD and DocILE: not used (no EC-FUNSD release on the Hugging Face hub when checked on 2026-11-21; DocILE data is gated behind a research-access request).
+
+**Verdict, gap 3:**
+- **The geometry + type matcher with Hungarian assignment** clearly beats nearest-neighbour:
+  - pair F1 0.452 vs 0.372, 32 vs 10 forms, p = 9.4e-4;
+  - it also wrongly fills fewer blank fields (13.6% vs 20.3%).
+- **Adding LiLT's question/answer probabilities as features (geo_lilt)** is the best variant:
+  - pair F1 0.581, precision 0.820, only 5.5% of blanks filled, 93% precision on repeated labels;
+  - better than geo alone (36 vs 8 forms, p = 2.5e-5) and than LiLT + nearest-neighbour (38 vs 7, p = 3.1e-6).
+  - But LiLT is a 521 MB fp32 checkpoint (0.23 s per form on CPU).
+- **Pick:** ship the pure geometry matcher (no model, under 5 ms per form) as the default. Treat LiLT typing as an optional quality mode if a smaller (INT8, about 130 MB) export validates.
+- Recall stays low (0.40-0.45) because FUNSD links are often multi-line or table-like values.
+
+## Forms: FFDetr
+
+Test only, not a replacement.
+- **Code:** commonforms 0.2.1 inference logic, run through rfdetr 1.12.1 (Apache-2.0). commonforms itself has no licence file and depends on ultralytics (AGPL), so it was not installed.
+- **Checkpoints:** jbarrow/FFDetr@56f4e42 and pdf-net/ffdetr-filled@186c904. Both cards say apache-2.0; neither repo has a LICENSE file. 135 MB each.
+
+Checkpoints: jbarrow/FFDetr@56f4e42 and pdf-net/ffdetr-filled@186c904 (model cards: apache-2.0; repos ship no separate LICENSE file). Matching at IoU 0.5 with the same class unless noted.
+
+### Generated flattened forms (gold = AcroForm widgets before flattening)
+
+| model | variant | field type | P | R | F1 | gold |
+|---|---|---|---|---|---|---|
+| ffdetr | empty | TextBox | 0.890 | 0.963 | 0.925 | 1760 |
+| ffdetr | empty | ChoiceButton | 1.000 | 0.961 | 0.980 | 770 |
+| ffdetr | empty | Signature | 0.000 | 0.000 | 0.000 | 154 |
+| ffdetr | empty | any class | 0.978 | 0.963 | 0.970 | 2684 |
+| ffdetr | filled | TextBox | 0.740 | 0.430 | 0.544 | 1760 |
+| ffdetr | filled | ChoiceButton | 1.000 | 0.369 | 0.539 | 770 |
+| ffdetr | filled | Signature | 0.000 | 0.000 | 0.000 | 154 |
+| ffdetr | filled | any class | 0.879 | 0.428 | 0.576 | 2684 |
+| ffdetr | filled_scan | TextBox | 0.692 | 0.315 | 0.433 | 1760 |
+| ffdetr | filled_scan | ChoiceButton | 1.000 | 0.138 | 0.242 | 770 |
+| ffdetr | filled_scan | Signature | 0.000 | 0.000 | 0.000 | 154 |
+| ffdetr | filled_scan | any class | 0.825 | 0.279 | 0.417 | 2684 |
+| ffdetr_filled | empty | TextBox | 0.882 | 0.945 | 0.913 | 1760 |
+| ffdetr_filled | empty | ChoiceButton | 0.999 | 0.951 | 0.974 | 770 |
+| ffdetr_filled | empty | Signature | 0.800 | 0.026 | 0.050 | 154 |
+| ffdetr_filled | empty | any class | 0.972 | 0.950 | 0.961 | 2684 |
+| ffdetr_filled | filled | TextBox | 0.842 | 0.589 | 0.693 | 1760 |
+| ffdetr_filled | filled | ChoiceButton | 0.990 | 0.739 | 0.846 | 770 |
+| ffdetr_filled | filled | Signature | 0.667 | 0.013 | 0.025 | 154 |
+| ffdetr_filled | filled | any class | 0.941 | 0.634 | 0.758 | 2684 |
+| ffdetr_filled | filled_scan | TextBox | 0.843 | 0.484 | 0.615 | 1760 |
+| ffdetr_filled | filled_scan | ChoiceButton | 1.000 | 0.631 | 0.774 | 770 |
+| ffdetr_filled | filled_scan | Signature | 0.800 | 0.026 | 0.050 | 154 |
+| ffdetr_filled | filled_scan | any class | 0.952 | 0.533 | 0.683 | 2684 |
+
+Checkbox state (ink share inside the detected box > 0.06; FFDetr itself has no checked/unchecked class):
+
+- ffdetr: empty 735/740 (0.993), filled 282/284 (0.993), filled_scan 104/106 (0.981); same rule on the gold boxes: 1540/1540
+- ffdetr_filled: empty 720/732 (0.984), filled 565/569 (0.993), filled_scan 483/486 (0.994); same rule on the gold boxes: 1540/1540
+
+### FUNSD (no widget boxes: answer entities used as value regions)
+
+| model | answers covered (recall proxy) | TextBox boxes on an answer (precision proxy) | TextBox boxes on a question label |
+|---|---|---|---|
+| ffdetr | 31/3623 = 0.009 | 36/1224 = 0.029 | 2/1224 = 0.002 |
+| ffdetr_filled | 538/3623 = 0.148 | 538/2027 = 0.265 | 39/2027 = 0.019 |
+
+### Signatures (SignverOD, 250 scanned pages with signatures, IoU 0.3)
+
+| model | P | R | F1 |
+|---|---|---|---|
+| ffdetr | 0.000 | 0.000 | 0.000 |
+| ffdetr_filled | 0.000 | 0.000 | 0.000 |
+
+CPU time per page (4 threads, torch CPU, includes pre/post-processing): ffdetr p50 531 ms (135 MB checkpoint), ffdetr_filled p50 553 ms (135 MB checkpoint)
+
+### FFDetr boxes as value regions for the label->value matcher (vs OCR lines only)
+
+FUNSD (50 test forms, entity-level pairs):
+
+| value regions | pair P | pair R | pair F1 | forms better / worse vs OCR only | p |
+|---|---|---|---|---|---|
+| OCR lines only | 0.524 | 0.397 | 0.452 | - | - |
+| ffdetr TextBox boxes | 0.500 | 0.002 | 0.005 | 0 / 46 | 2.8e-14 |
+| ffdetr_filled TextBox boxes | 0.336 | 0.057 | 0.098 | 1 / 45 | 1.3e-12 |
+
+Generated flattened forms (test templates):
+
+| variant | gold pairs | value regions | pair P | pair R | pair F1 | forms better / worse vs OCR only | p |
+|---|---|---|---|---|---|---|---|
+| empty | all fields | OCR lines only | - | 0.000 | - | - | - |
+| empty | all fields | ffdetr boxes | 0.934 | 0.604 | 0.733 | - | - |
+| empty | all fields | ffdetr_filled boxes | 0.935 | 0.591 | 0.724 | - | - |
+| filled | filled fields | OCR lines only | 0.939 | 0.820 | 0.875 | - | - |
+| filled | filled fields | ffdetr boxes | 0.710 | 0.246 | 0.365 | 1 / 107 | 6.7e-31 |
+| filled | filled fields | ffdetr_filled boxes | 0.855 | 0.390 | 0.536 | 11 / 90 | 1.4e-16 |
+| filled | all fields | OCR lines only | 0.929 | 0.463 | 0.618 | - | - |
+| filled | all fields | ffdetr boxes | 0.811 | 0.242 | 0.372 | 21 / 88 | 6.1e-11 |
+| filled | all fields | ffdetr_filled boxes | 0.865 | 0.325 | 0.473 | 34 / 70 | 5.3e-04 |
+| filled_scan | filled fields | OCR lines only | 0.904 | 0.829 | 0.865 | - | - |
+| filled_scan | filled fields | ffdetr boxes | 0.709 | 0.182 | 0.289 | 3 / 107 | 3.4e-28 |
+| filled_scan | filled fields | ffdetr_filled boxes | 0.838 | 0.306 | 0.448 | 7 / 99 | 6.5e-22 |
+| filled_scan | all fields | OCR lines only | 0.904 | 0.468 | 0.616 | - | - |
+| filled_scan | all fields | ffdetr boxes | 0.825 | 0.198 | 0.320 | 15 / 91 | 1.9e-14 |
+| filled_scan | all fields | ffdetr_filled boxes | 0.888 | 0.265 | 0.408 | 27 / 81 | 1.9e-07 |
+
+**Verdict, FFDetr:**
+- **Good empty-field detector, poor filled-form detector:**
+  - empty generated forms: text fields F1 0.91-0.93, checkboxes 0.97-0.98;
+  - filled forms: base model F1 0.54 (filled_scan 0.43); the filled-form fine-tune 0.69 (0.62) for text fields and 0.85 (0.77) for checkboxes.
+- **Signatures:** almost never detected (F1 <= 0.05 on generated signature fields, 0 on SignverOD's handwritten signatures).
+- **FUNSD:** it marks only 0.9-15% of filled answers.
+- **Checkbox state** from the ink inside the detected box is reliable: 98-99%.
+- **As value regions for the matcher, it lowers pair F1 everywhere except empty forms:**
+  - filled generated forms: 0.54 vs 0.875 with OCR lines;
+  - FUNSD: 0.10 vs 0.45.
+  - On empty forms it is the only way to pair labels with blank fields: F1 0.73, where OCR-only gets nothing.
+- **Use:** only as an optional "find blank fields and checkboxes" step on empty or flattened templates, never as the value source on filled forms. About 0.55 s per page on CPU.
+
+## Gap 1. OCR (status)
+
+**Main test:**
+- **Run 44898133792:** scored 2,307 of 2,771 pages and 1,992 of 3,934 OmniDocBench regions with every arm (0 page errors) before its jobs hit their time limits.
+- **Run 45140135889** (`ocr-complete-r4.yml`) scores the rest, split by arm group. The full tables are added from its report.
+- **Measured cost:** in the main run, Tesseract best per crop averaged 124 s per page, PP-OCRv6 medium det + rec end to end 112 s, whole-page Tesseract best 111 s, and PP-OCRv6 medium rec 82 s. PP-OCRv6 small rec took 2.7 s.
+
+**Timing job** (one thread, own process, Intel Xeon 6975P-C):
+
+| component | items | mean ms | p50 ms | p95 ms |
+|---|---|---|---|---|
+| det_s | 24 | 1531.5 | 1226.0 | 2616.8 |
+| det_m | 24 | 18482.0 | 14510.6 | 33042.7 |
+| uvdoc | 8 | 272.4 | 248.5 | 300.5 |
+| v6s | 600 | 12.8 | 8.2 | 37.0 |
+| v6m | 600 | 733.8 | 486.0 | 2118.9 |
+| v5en | 600 | 15.1 | 7.7 | 51.6 |
+| crnn | 600 | 2.3 | 1.5 | 5.8 |
+| viptr | 600 | 16.2 | 11.5 | 37.4 |
+| tess_fast | 600 | 6.9 | 4.7 | 18.4 |
+| tess_best | 600 | 12.7 | 8.6 | 34.9 |
+
+- PP-OCRv6 medium is far slower than small: about 57x per line crop (734 vs 12.8 ms), and 12x for the detector per page (18.5 vs 1.5 s).
+- The peak-RSS field of this job is the same for every component (it is dominated by the shared crop set), so RAM per model is reported from the extra-challengers run.
