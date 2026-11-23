@@ -1,0 +1,21 @@
+name: docling-omml-r4
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  docling-omml:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - run: pip install docling-rs==2.84.0 rapidfuzz==3.14.6 lxml==6.1.3
+      - run: mkdir -p out && python media/wordmath/run_docling_omml.py out
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: docling-omml, path: out/ }
