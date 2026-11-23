@@ -2,7 +2,11 @@ name: ocr-diag-r4
 
 # Diagnose PP-OCRv6 medium vs small on long synthetic lines (input variants, printed strings for the worst crops).
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      which:
+        description: "medium (input variants) | paddle (official Paddle inference vs ONNX)"
+        default: medium
 
 permissions:
   contents: read
@@ -34,7 +38,15 @@ jobs:
             /home/runner/media-data/odb
           key: media-ocr-data-v1
           fail-on-cache-miss: true
-      - run: mkdir -p out && python media/ocr/diag_medium.py out/diag_medium.json | tee out/diag_medium.txt
+      - if: inputs.which == 'paddle'
+        run: pip install paddlepaddle==3.0.0
+      - run: |
+          mkdir -p out
+          if [ "${{ inputs.which }}" = "paddle" ]; then
+            python media/ocr/paddle_check.py out/paddle_check.json | tee out/paddle_check.txt
+          else
+            python media/ocr/diag_medium.py out/diag_medium.json | tee out/diag_medium.txt
+          fi
       - uses: actions/upload-artifact@v4
         if: always()
         with: { name: ocr-diag-medium, path: out/ }
