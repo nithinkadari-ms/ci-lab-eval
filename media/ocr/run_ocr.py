@@ -26,14 +26,27 @@ from common import bag_f1, edits, norm_text, num_tokens, shard, word_edits  # no
 TAUS = [0.5, 0.6, 0.7, 0.8, 0.85, 0.9, 0.95, 0.98]
 PADDLE = {"v6s", "v6m", "v5en"}
 G = {}
+# arm groups: each job runs one group so heavy arms do not stack; records are merged by id afterwards
+GROUP = os.environ.get("OCR_GROUP", "all")
+GROUP_ENG = {"core": ["v6s", "v5en", "crnn", "viptr"], "v6m": ["v6m"], "tess": ["v6s", "tess_fast", "tess_best"],
+             "all": list(engines.CROP_ENGINES)}
+REGION_ENG = {"core": ["v6s", "v5en", "crnn", "viptr"], "v6m": ["v6m"], "tess": ["tess_fast", "tess_best"],
+              "all": list(engines.CROP_ENGINES)}
 
 
-def init():
+def has(part):
+    return GROUP == "all" or GROUP == part
+
+
+def init(mode="pages"):
     G["det_s"] = ppocr.Detector(engines.P["det_s"])
-    G["det_m"] = ppocr.Detector(engines.P["det_m"])
-    G["eng"] = engines.build(engines.CROP_ENGINES)
-    G["tess_page"] = {k: engines.Tess(k, psm_line=False) for k in ("fast", "best")}
-    G["uvdoc"] = engines.UVDoc()
+    G["eng"] = engines.build((GROUP_ENG if mode == "pages" else REGION_ENG)[GROUP])
+    if mode == "pages" and has("v6m"):
+        G["det_m"] = ppocr.Detector(engines.P["det_m"])
+    if mode == "pages" and has("tess"):
+        G["tess_page"] = {k: engines.Tess(k, psm_line=False) for k in ("fast", "best")}
+    if mode == "pages" and has("core"):
+        G["uvdoc"] = engines.UVDoc()
 
 
 def serialize(items):
@@ -110,7 +123,7 @@ def do_page(p):
     t0 = time.perf_counter()
     rgb, words, fields, kind = data.load(p)
     rec = {k: p[k] for k in ("id", "group", "ds", "defect", "split")}
-    rec.update(kind=kind, H=int(rgb.shape[0]), W=int(rgb.shape[1]), n_words=len(words))
+    rec.update(kind=kind, H=int(rgb.shape[0]), W=int(rgb.shape[1]), n_words=len(words), arm_group=GROUP)
     gt_str = serialize([(w["t"], w["box"]) for w in words])
     (boxes, ms_det) = engines.timed(G["det_s"], rgb)
     rec["ms_det_s"] = ms_det
@@ -151,7 +164,7 @@ def do_page(p):
             items[n].append((t, boxes[k]["box"]))
     for n in G["eng"]:
         e2e[n] = e2e_metrics(items[n], gt_str, fields)
-    for tau in TAUS:
+    for tau in (TAUS if has("tess") else []):
         for mode in ("rep", "rep_if_higher"):
             it = []
             for idx, k in enumerate(keep):
@@ -163,11 +176,12 @@ def do_page(p):
                     continue
                 it.append((t, boxes[k]["box"]))
             e2e[f"hyb_{mode}_{tau}"] = e2e_metrics(it, gt_str, fields)
-    t = time.perf_counter()
-    mitems, _ = page_ocr(rgb, "det_m", "v6m")
-    e2e["v6m_det+rec"] = e2e_metrics(mitems, gt_str, fields)
-    e2e["v6m_det+rec"]["ms"] = (time.perf_counter() - t) * 1000
-    for kk in ("fast", "best"):
+    if has("v6m"):
+        t = time.perf_counter()
+        mitems, _ = page_ocr(rgb, "det_m", "v6m")
+        e2e["v6m_det+rec"] = e2e_metrics(mitems, gt_str, fields)
+        e2e["v6m_det+rec"]["ms"] = (time.perf_counter() - t) * 1000
+    for kk in (("fast", "best") if has("tess") else ()):
         t = time.perf_counter()
         e2e[f"tess_{kk}_page"] = e2e_metrics([(l["text"], l["box"]) for l in G["tess_page"][kk].page_lines(rgb)],
                                              gt_str, fields)
@@ -175,6 +189,10 @@ def do_page(p):
     dfx = engines.defects(rgb, boxes)
     gates = engines.gate(dfx)
     rec["defects"], rec["gates"] = dfx, gates
+    if not has("core"):
+        rec["e2e"] = e2e
+        rec["ms_page"] = (time.perf_counter() - t0) * 1000
+        return rec
 
     def arm(name, fn):
         t = time.perf_counter()
@@ -227,13 +245,15 @@ def do_region(p):
         pt = norm_text(" ".join(ts))
         we, nw = word_edits(pt, g)
         rec[n] = [edits(pt, g), we, nw]
-    from PIL import Image
-    import pytesseract
-    t = pytesseract.image_to_string(Image.fromarray(rgb), lang="eng",
-                                    config=f"--tessdata-dir {engines.P['tess_best']} --oem 1 --psm 6")
-    pt = norm_text(t)
-    we, nw = word_edits(pt, g)
-    rec["tess_best_block"] = [edits(pt, g), we, nw]
+    rec["arm_group"] = GROUP
+    if has("tess"):
+        from PIL import Image
+        import pytesseract
+        t = pytesseract.image_to_string(Image.fromarray(rgb), lang="eng",
+                                        config=f"--tessdata-dir {engines.P['tess_best']} --oem 1 --psm 6")
+        pt = norm_text(t)
+        we, nw = word_edits(pt, g)
+        rec["tess_best_block"] = [edits(pt, g), we, nw]
     return rec
 
 
@@ -255,23 +275,47 @@ def _region(p):
     return safe(do_region)(p)
 
 
+def done_ids(art):
+    """ids already scored with every arm in an earlier run (full records written by the all-arms runner)"""
+    import glob
+    ids = set()
+    for f in glob.glob(os.path.join(art, "**", "*.jsonl"), recursive=True):
+        for line in open(f, encoding="utf-8"):
+            try:
+                r = json.loads(line)
+            except ValueError:
+                continue
+            if "error" not in r and r.get("arm_group", "all") == "all":
+                ids.add(r["id"])
+    return ids
+
+
 def main():
     mode, k, n, out = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), sys.argv[4]
     workers = int(sys.argv[5]) if len(sys.argv) > 5 else 4
     if mode == "pages":
         data.sroie_extract()
-    items = shard(data.all_pages() if mode == "pages" else data.odb_regions(), k, n)
+    items = data.all_pages() if mode == "pages" else data.odb_regions()
+    prev = os.environ.get("OCR_DONE_DIR")
+    if prev:
+        done = done_ids(prev)
+        items = [it for it in items if it["id"] not in done]
+        print("already done in the earlier run:", len(done), "to do:", len(items), flush=True)
+    items = shard(items, k, n)
     fn = _page if mode == "pages" else _region
-    errs = 0
-    with Pool(workers, initializer=init, maxtasksperchild=30) as pool, open(out, "w", encoding="utf-8") as f:
+    errs = rows = 0
+    with Pool(workers, initializer=init, initargs=(mode,), maxtasksperchild=30) as pool, \
+            open(out, "w", encoding="utf-8") as f:
         for i, r in enumerate(pool.imap_unordered(fn, items, chunksize=1)):
             errs += "error" in r
+            rows += 1
             f.write(json.dumps(r) + "\n")
-            if i % 25 == 0:
-                print(mode, k, i, len(items), "errors", errs, flush=True)
-    print("done", mode, k, len(items), "errors", errs)
-    if errs > 0.2 * max(1, len(items)):
-        sys.exit("too many errors")
+            f.flush()
+            if i % 10 == 0:
+                print(mode, GROUP, k, i, len(items), "errors", errs, flush=True)
+    print("done", mode, GROUP, k, "items", len(items), "rows", rows, "errors", errs, flush=True)
+    if items and (rows == 0 or errs > 0.02 * rows):
+        sys.exit(f"FAILED: {errs} errors in {rows} rows (limit 2%)")
 
 
 if __name__ == "__main__":

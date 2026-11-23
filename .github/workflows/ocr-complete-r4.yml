@@ -1,0 +1,121 @@
+name: ocr-complete-r4
+
+# Gap 1, completing the main OCR test. Run 44898133792 scored 2,307 of 2,771 pages and 1,992 of 3,934 regions with
+# every arm (0 errors) before its jobs hit the timeout. This run scores only the missing pages/regions, split by arm
+# group so heavy arms do not stack in one job: core (v6s, v5en, CRNN, VIPTR, preprocessing incl. UVDoc),
+# v6m (PP-OCRv6 medium rec + medium det end to end), tess (Tesseract fast/best on crops and pages, low-confidence
+# hybrid). Records are merged by id in the report. 20 jobs, at most 12 at once.
+on:
+  workflow_dispatch:
+    inputs:
+      prev_run:
+        description: "earlier media-r4 run whose ocr-pages-* / ocr-regions-* records are kept"
+        default: "44898133792"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: ocr-complete-r4-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  MEDIA_DATA: /home/runner/media-data
+  MEDIA_MODELS: /home/runner/media-models
+  OCR_N_SYNTH: "240"
+  OCR_N_ODB: "4000"
+  PYTHONUNBUFFERED: "1"
+  HF_HUB_DISABLE_PROGRESS_BARS: "1"
+  OMP_NUM_THREADS: "1"
+  OMP_THREAD_LIMIT: "1"
+
+jobs:
+  work:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 170
+    strategy:
+      fail-fast: false
+      max-parallel: 12
+      matrix:
+        include:
+          - { mode: pages, group: core, shard: 0, n: 2 }
+          - { mode: pages, group: core, shard: 1, n: 2 }
+          - { mode: pages, group: v6m, shard: 0, n: 5 }
+          - { mode: pages, group: v6m, shard: 1, n: 5 }
+          - { mode: pages, group: v6m, shard: 2, n: 5 }
+          - { mode: pages, group: v6m, shard: 3, n: 5 }
+          - { mode: pages, group: v6m, shard: 4, n: 5 }
+          - { mode: pages, group: tess, shard: 0, n: 4 }
+          - { mode: pages, group: tess, shard: 1, n: 4 }
+          - { mode: pages, group: tess, shard: 2, n: 4 }
+          - { mode: pages, group: tess, shard: 3, n: 4 }
+          - { mode: regions, group: core, shard: 0, n: 1 }
+          - { mode: regions, group: v6m, shard: 0, n: 3 }
+          - { mode: regions, group: v6m, shard: 1, n: 3 }
+          - { mode: regions, group: v6m, shard: 2, n: 3 }
+          - { mode: regions, group: tess, shard: 0, n: 5 }
+          - { mode: regions, group: tess, shard: 1, n: 5 }
+          - { mode: regions, group: tess, shard: 2, n: 5 }
+          - { mode: regions, group: tess, shard: 3, n: 5 }
+          - { mode: regions, group: tess, shard: 4, n: 5 }
+    env:
+      OCR_GROUP: ${{ matrix.group }}
+      OCR_DONE_DIR: prev
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11", cache: pip, cache-dependency-path: "media/requirements*.txt" }
+      - run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends tesseract-ocr libtesseract-dev libleptonica-dev pkg-config fonts-liberation fonts-dejavu-core
+      - run: |
+          pip install -r media/requirements.txt
+          pip install onnxtr==0.9.0
+          pip install --no-binary tesserocr tesserocr==2.13.0 || echo "tesserocr build failed: pytesseract is used"
+      - uses: actions/cache/restore@v4
+        with: { path: /home/runner/media-models, key: "media-models-v1-${{ hashFiles('media/fetch.py') }}", fail-on-cache-miss: true }
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            /home/runner/media-data/funsd
+            /home/runner/media-data/sroie
+            /home/runner/media-data/odb
+          key: media-ocr-data-v1
+          fail-on-cache-miss: true
+      - uses: actions/download-artifact@v4
+        with:
+          path: prev
+          pattern: "ocr-${{ matrix.mode }}-*"
+          run-id: ${{ inputs.prev_run }}
+          github-token: ${{ github.token }}
+      - run: mkdir -p out && python media/ocr/run_ocr.py ${{ matrix.mode }} ${{ matrix.shard }} ${{ matrix.n }} out/ocr-${{ matrix.mode }}-${{ matrix.group }}-${{ matrix.shard }}.jsonl 3
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: "ocrc-${{ matrix.mode }}-${{ matrix.group }}-${{ matrix.shard }}", path: out/ }
+
+  report:
+    needs: [work]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - run: pip install rapidfuzz==3.14.6 scipy==1.17.1
+      - uses: actions/download-artifact@v4
+        with: { path: art/new, pattern: "ocrc-*" }
+      - uses: actions/download-artifact@v4
+        with:
+          path: art/prev
+          pattern: "ocr-*"
+          run-id: ${{ inputs.prev_run }}
+          github-token: ${{ github.token }}
+      - run: |
+          mkdir -p out
+          python media/ocr/agg_ocr.py art out/ocr.md out/ocr.json
+          cat out/ocr.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: ocr-report-complete, path: out/ }

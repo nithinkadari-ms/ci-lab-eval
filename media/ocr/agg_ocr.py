@@ -26,8 +26,12 @@ def crop_stats(pages, eng, tau=None, mode=None):
             if c["n"] == 0:
                 continue
             if tau is None:
-                r = c[eng]
+                r = c.get(eng)
+                if r is None:
+                    continue
             else:
+                if "v6s" not in c or "tess_best" not in c:
+                    continue
                 c6, ct = c["v6s"][2], c["tess_best"][2]
                 use = c6 < tau and (mode == "rep" or ct > c6)
                 r = c["tess_best"] if use else c["v6s"]
@@ -75,13 +79,45 @@ def paired(base, cand):
     return w, l, p, lo, hi, len(gs)
 
 
+MISMATCH = []
+
+
+def merge(rows, is_page):
+    """records of the same page/region from different arm-group jobs (or an earlier all-arms run) -> one record;
+    crop rows are index-aligned (same detector, same boxes), checked by count."""
+    by = {}
+    for r in rows:
+        b = by.get(r["id"])
+        if b is None:
+            by[r["id"]] = r
+            continue
+        if is_page:
+            if len(b.get("crops", [])) == len(r.get("crops", [])):
+                for c1, c2 in zip(b["crops"], r["crops"]):
+                    for k, v in c2.items():
+                        c1.setdefault(k, v)
+            else:
+                MISMATCH.append(r["id"])
+            for k in ("e2e", "ms_rec"):
+                for kk, v in (r.get(k) or {}).items():
+                    b.setdefault(k, {}).setdefault(kk, v)
+            for k in ("defects", "gates"):
+                b.setdefault(k, r.get(k))
+        else:
+            for k, v in r.items():
+                b.setdefault(k, v)
+            for kk, v in (r.get("ms_rec") or {}).items():
+                b.setdefault("ms_rec", {}).setdefault(kk, v)
+    return list(by.values())
+
+
 def main():
     art, out_md, out_js = sys.argv[1], sys.argv[2], sys.argv[3]
     pages = [r for r in jl_read(glob.glob(os.path.join(art, "**", "ocr-pages-*.jsonl"), recursive=True))]
     regs = [r for r in jl_read(glob.glob(os.path.join(art, "**", "ocr-regions-*.jsonl"), recursive=True))]
     errs = [r for r in pages + regs if "error" in r]
-    pages = [r for r in pages if "error" not in r]
-    regs = [r for r in regs if "error" not in r]
+    pages = merge([r for r in pages if "error" not in r], True)
+    regs = merge([r for r in regs if "error" not in r], False)
     res = {"n_pages": len(pages), "n_regions": len(regs), "errors": len(errs)}
     P("## Gap 1. OCR on scanned English documents")
     P()
@@ -178,7 +214,7 @@ def main():
         by[p["defect"]].append(p)
     for d, ps in sorted(by.items()):
         P(f"| {d} | {len(ps)} | " + " | ".join(
-            f"{sum(p['gates'][g] for p in ps) / len(ps):.2f}" for g in ("deskew", "clahe", "denoise", "uvdoc")) + " |")
+            f"{sum(p['gates'][g] for p in ps if p.get('gates')) / len(ps):.2f}" for g in ("deskew", "clahe", "denoise", "uvdoc")) + " |")
     P()
     if regs:
         P("### 1e. OmniDocBench English text regions (detector on the region crop, all regions)")
@@ -189,7 +225,7 @@ def main():
         res["odb"] = {}
         for name, f in (("all", lambda r: True), ("hard sources", lambda r: r["defect"] == "odb_hard"),
                         ("other sources", lambda r: r["defect"] == "odb_other")):
-            rs = [r for r in regs if f(r)]
+            rs = [r for r in regs if f(r) and all(e in r for e in cols)]
             if not rs:
                 continue
             n = sum(r["n"] for r in rs)
@@ -206,6 +242,8 @@ def main():
         gb = defaultdict(lambda: defaultdict(lambda: [0, 0]))
         for r in regs:
             for e in cols:
+                if e not in r:
+                    continue
                 gb[e][r["group"]][0] += r[e][0]
                 gb[e][r["group"]][1] += r["n"]
         base = {g: a / max(1, b) for g, (a, b) in gb["v6s"].items()}
@@ -229,6 +267,10 @@ def main():
                 P(f"| {r['what']} | {r['n']} | {r['load_ms']:.0f} | {r['mean_ms']:.1f} | {r['p50_ms']:.1f} | "
                   f"{r['p95_ms']:.1f} | {r['peak_rss_mb']:.0f} |")
         P()
+    full = sum(1 for p in pages if all(e in (p.get("crops") or [{}])[0] for e in ENG) if p.get("crops"))
+    P(f"Merged records: {len(pages)} pages ({full} with every crop arm), {len(regs)} regions; crop-count mismatches "
+      f"between arm-group jobs: {len(MISMATCH)}.")
+    P()
     if errs:
         P("Errors (first 5): " + "; ".join(f"{e['id']}: {e['error'][:120]}" for e in errs[:5]))
         P()

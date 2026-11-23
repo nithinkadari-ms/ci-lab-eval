@@ -46,23 +46,58 @@ def paired(a, b):
 def main():
     art, out_md, out_js = sys.argv[1], sys.argv[2], sys.argv[3]
     rows = jl_read(glob.glob(os.path.join(art, "**", "extra-*.jsonl"), recursive=True))
-    infos = [r["info"] for r in rows if "info" in r]
-    pages = [r for r in rows if "id" in r and "error" not in r]
+    infos = {r["info"].get("group", "all"): r["info"] for r in rows if "info" in r}
     errs = [r for r in rows if "error" in r]
+    by = {}
+    mism = 0
+    for r in rows:
+        if "id" not in r or "error" in r:
+            continue
+        b0 = by.get(r["id"])
+        if b0 is None:
+            by[r["id"]] = r
+            continue
+        if r.get("crops"):
+            if not b0.get("crops"):
+                b0["crops"] = r["crops"]
+            elif len(b0["crops"]) == len(r["crops"]):
+                for c1, c2 in zip(b0["crops"], r["crops"]):
+                    for kk, v in c2.items():
+                        c1.setdefault(kk, v)
+            else:
+                mism += 1
+        for kk in ("e2e", "ms"):
+            for k2, v in (r.get(kk) or {}).items():
+                b0.setdefault(kk, {}).setdefault(k2, v)
+        for kk in ("docres_gate", "docres_task", "docres_why", "lap_var", "n_crops", "n_word_crops"):
+            if kk in r:
+                b0.setdefault(kk, r[kk])
+    main_dir = sys.argv[4] if len(sys.argv) > 4 else None
+    v6m_pages = 0
+    if main_dir:
+        for m in jl_read(glob.glob(os.path.join(main_dir, "**", "ocr-pages-*.jsonl"), recursive=True)):
+            e = by.get(m.get("id"))
+            if e is None or "error" in m or not e.get("crops") or not m.get("crops"):
+                continue
+            if len(m["crops"]) != len(e["crops"]) or "v6m" not in m["crops"][0]:
+                continue
+            for c1, c2 in zip(e["crops"], m["crops"]):
+                if c1["n"] == c2["n"] and "v6m" in c2:
+                    ed, we, conf, nh, _ = c2["v6m"]
+                    c1.setdefault("v6m", [ed, we, nh, conf])
+            v6m_pages += 1
+    pages = list(by.values())
     res = {}
     P("## OCR: extra challengers")
     P()
-    P(f"Same pages and the same PP-OCRv6 small detector crops as the main OCR test (every 4th page: {len(pages)} pages, "
-      f"{sum(len(p.get('crops', [])) for p in pages)} line crops; errors {len(errs)}). UniRec ran on every 8th page "
-      "(its own column compares against PP-OCRv6 on the same crops). Paired tests per document on all sampled "
-      "pages (no tuning except the second-reader threshold, which uses the dev split only).")
-    if infos:
-        i = infos[0]
-        P()
-        P(f"Models: UnionST-SP {i.get('unionst_mb', 0):.1f} MB checkpoint (missing keys {i.get('unionst_missing_keys')}); "
-          f"UniRec-0.1B ONNX fp32 encoder+decoder {i.get('unirec_mb', 0):.0f} MB; DocRes {i.get('docres_mb', 0):.0f} MB. "
-          f"Process RSS after loading: PP-OCRv6 s+m {i['rss_ppocr']:.0f} MB, +UnionST {i['rss_unionst']:.0f} MB, "
-          f"+UniRec {i['rss_unirec']:.0f} MB, +DocRes {i['rss_docres']:.0f} MB (cumulative).")
+    P(f"Same pages and the same PP-OCRv6 small detector crops as the main OCR test (UnionST and DocRes: every 4th "
+      f"page; UniRec: every 8th page). Pages with records: {len(pages)}, line crops: "
+      f"{sum(len(p.get('crops', [])) for p in pages)}, page errors {len(errs)}, crop-count mismatches between jobs "
+      f"{mism}. PP-OCRv6 medium on the same crops is taken from the main OCR records ({v6m_pages} pages matched). "
+      "Paired tests per document; only the second-reader threshold is tuned (dev split).")
+    P()
+    for g, i in sorted(infos.items()):
+        P(f"- {g}: " + ", ".join(f"{k} {v:.1f}" if isinstance(v, float) else f"{k} {v}" for k, v in i.items() if k != "group"))
     P()
     slices = [("all", lambda p: True), ("funsd", lambda p: p["ds"] == "funsd"), ("sroie", lambda p: p["ds"] == "sroie"),
               ("synth", lambda p: p["ds"] == "synth")]
@@ -97,7 +132,8 @@ def main():
                 sub = [p for p in ps if any(ch in c for c in p.get("crops", []))]
                 if not sub:
                     continue
-                w, l, pv, lo, hi, n = paired(crop_stats(sub, base)["grp"], crop_stats(sub, ch)["grp"])
+                both = [dict(p, crops=[c for c in p.get("crops", []) if ch in c and base in c]) for p in sub]
+                w, l, pv, lo, hi, n = paired(crop_stats(both, base)["grp"], crop_stats(both, ch)["grp"])
                 P(f"| {name} | {ch} | {base} | {n} | {w} | {l} | {pfmt(pv)} | [{lo:+.4f}, {hi:+.4f}] |")
     P()
     P("### UnionST on long lines (word-level model, max 25 characters, input squeezed to at most 128 x 32)")

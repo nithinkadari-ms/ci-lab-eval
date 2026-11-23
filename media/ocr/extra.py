@@ -194,8 +194,8 @@ def _deblur_prompt(img):
 
 class DocRes:
     """Port of DocRes inference.py (deshadowing / appearance / deblurring) in float32 on CPU (the author code casts
-    to fp16 for GPU). Inputs above 1600 px use the author's 1600x1600 resize + shadow-map route for deshadowing and
-    appearance; deblurring is capped at 1600 px on the longer side here to stay within CPU memory."""
+    to fp16 for GPU). The network runs at full resolution in 512 px tiles with 64 px overlap (the author code runs the
+    whole image, resized to 1600 x 1600 for large pages); the task prompts are computed on the whole page."""
     MAX = 1600
 
     def __init__(self):
@@ -224,27 +224,34 @@ class DocRes:
         ph, pw = (8 - h % 8) % 8, (8 - w % 8) % 8
         return cv2.copyMakeBorder(im, ph, 0, pw, 0, cv2.BORDER_REPLICATE), ph, pw
 
+    def _tiled(self, x, tile=512, ov=64):
+        """full-resolution inference in overlapping tiles (bounded memory on CPU); the prompt channels are computed
+        on the whole page beforehand, as in the author code"""
+        x, ph, pw = self._pad8(x)
+        H, W = x.shape[:2]
+        out = np.zeros((H, W, 3), np.float32)
+        wsum = np.zeros((H, W, 1), np.float32)
+        step = tile - ov
+        ys = list(range(0, max(1, H - ov), step)) or [0]
+        xs = list(range(0, max(1, W - ov), step)) or [0]
+        for y0 in ys:
+            for x0 in xs:
+                y1, x1 = min(H, y0 + tile), min(W, x0 + tile)
+                ya, xa = max(0, y1 - tile), max(0, x1 - tile)
+                t8, tph, tpw = self._pad8(x[ya:y1, xa:x1])
+                out[ya:y1, xa:x1] += self._run(t8)[tph:, tpw:].astype(np.float32)
+                wsum[ya:y1, xa:x1] += 1
+        return (out / np.maximum(wsum, 1)).astype(np.uint8)[ph:, pw:]
+
     def __call__(self, rgb, task):
         bgr = rgb[:, :, ::-1].copy()
-        h, w = bgr.shape[:2]
         if task == "deblurring":
-            s = min(1.0, self.MAX / max(h, w))
-            im = cv2.resize(bgr, (int(w * s) // 8 * 8 or 8, int(h * s) // 8 * 8 or 8)) if s < 1 else bgr
-            im, ph, pw = self._pad8(im)
-            out = self._run(np.concatenate((im, _deblur_prompt(im)), -1))[ph:, pw:]
-            out = cv2.resize(out, (w, h)) if out.shape[:2] != (h, w) else out
+            prompt = _deblur_prompt(bgr)
+        elif task == "deshadowing":
+            prompt = _deshadow_prompt(bgr)
         else:
-            prompt = _deshadow_prompt(bgr) if task == "deshadowing" else _appearance_prompt(bgr)
-            x = np.concatenate((bgr, prompt), -1)
-            if max(w, h) < self.MAX:
-                x, ph, pw = self._pad8(x)
-                out = self._run(x)[ph:, pw:]
-            else:
-                pred = self._run(cv2.resize(x, (self.MAX, self.MAX)))
-                pred[pred == 0] = 1
-                sm = cv2.resize(cv2.resize(bgr, (self.MAX, self.MAX)).astype(float) / pred.astype(float), (w, h))
-                sm[sm == 0] = 1e-5
-                out = np.clip(bgr.astype(float) / sm, 0, 255).astype(np.uint8)
+            prompt = _appearance_prompt(bgr)
+        out = self._tiled(np.concatenate((bgr, prompt), -1))
         return np.ascontiguousarray(out[:, :, ::-1])
 
 
@@ -270,34 +277,59 @@ def page_e2e(rgb, det, rec_fn, paddle, gt_str, fields):
     return run_ocr.e2e_metrics(items, gt_str, fields)
 
 
+GROUP = os.environ.get("EXTRA_GROUP", "unionst")
+CAP_JOB = int(os.environ.get("DOCRES_CAP", "2"))
+FORCED_JOB = int(os.environ.get("DOCRES_FORCED", "2"))
+
+
+def crop_gt(words, boxes, keep):
+    owner = run_ocr.assign(words, boxes)
+    gt_by = {}
+    for w, o in zip(words, owner):
+        if o >= 0:
+            gt_by.setdefault(o, []).append(w)
+    return [norm_text(run_ocr.serialize([(w["t"], w["box"]) for w in gt_by.get(i, [])])) for i in keep]
+
+
+def score_text(t, g):
+    pt = norm_text(t)
+    we, _ = word_edits(pt, g)
+    gnum = num_tokens(g)
+    return [edits(pt, g), we, sum((Counter(num_tokens(pt)) & Counter(gnum)).values())]
+
+
 def main():
+    """EXTRA_GROUP=unionst (every 4th page; v6s + UnionST line / word-split / second reader),
+    unirec (every 8th page; v6s + UniRec), docres (every 4th page; gate + tiled DocRes + v6s end to end).
+    PP-OCRv6 medium on the same crops comes from the main OCR records (same detector, same crop order)."""
     k, n, out = int(sys.argv[1]), int(sys.argv[2]), sys.argv[3]
     pages = data.all_pages()
-    sub = [p for i, p in enumerate(pages) if i % 4 == 0]
-    for i, p in enumerate(sub):
-        p["unirec"] = i % 2 == 0
+    step = 8 if GROUP == "unirec" else 4
+    sub = [p for i, p in enumerate(pages) if i % step == 0]
     mine = [p for i, p in enumerate(sub) if i % n == k]
-    info = {"rss_start": rss_mb()}
+    info = {"group": GROUP, "rss_start": rss_mb()}
     det = ppocr.Detector(engines.P["det_s"])
-    eng = engines.build(["v6s", "v6m"])
+    v6s = engines.build(["v6s"])["v6s"]
     info["rss_ppocr"] = rss_mb()
-    ust = UnionST()
-    info["rss_unionst"] = rss_mb()
-    info["unionst_missing_keys"] = ust.missing
-    uni = UniRecPIL()
-    info["rss_unirec"] = rss_mb()
-    info["unirec_mb"] = uni.size_mb
-    dres = DocRes()
-    info["rss_docres"] = rss_mb()
-    info["docres_mb"] = os.path.getsize(DOCRES_PKL) / 1e6
-    info["unionst_mb"] = os.path.getsize(UNIONST_PTH) / 1e6
+    if GROUP == "unionst":
+        model = UnionST()
+        info["unionst_missing_keys"] = model.missing
+        info["unionst_mb"] = os.path.getsize(UNIONST_PTH) / 1e6
+    elif GROUP == "unirec":
+        model = UniRecPIL()
+        info["unirec_mb"] = model.size_mb
+    else:
+        model = DocRes()
+        info["docres_mb"] = os.path.getsize(DOCRES_PKL) / 1e6
+    info["rss_model"] = rss_mb()
     print("models", info, flush=True)
     caps = Counter()
-    forced = 0
+    forced = rows = errs = 0
     with open(out, "w", encoding="utf-8") as f:
         f.write(json.dumps({"info": info}) + "\n")
         for p in mine:
             rec = {key: p[key] for key in ("id", "group", "ds", "defect", "split")}
+            rec["xgroup"] = GROUP
             try:
                 rgb, words, fields, kind = data.load(p)
                 rec["kind"] = kind
@@ -306,79 +338,84 @@ def main():
                 crops = [ppocr.crop(rgb, b["quad"]) for b in boxes]
                 keep = [i for i, c in enumerate(crops) if c is not None]
                 kc = [crops[i] for i in keep]
-                owner = run_ocr.assign(words, boxes)
-                gt_by = {}
-                for w, o in zip(words, owner):
-                    if o >= 0:
-                        gt_by.setdefault(o, []).append(w)
-                R, ms = {}, {}
-                for name, fn in (("v6s", eng["v6s"]), ("v6m", eng["v6m"]), ("unionst_line", ust.read)):
-                    t = time.perf_counter()
-                    R[name] = fn(kc)
-                    ms[name] = (time.perf_counter() - t) * 1000
-                t = time.perf_counter()
-                R["unionst_words"], nwords = [], 0
-                for c in kc:
-                    ws = split_words(c)
-                    nwords += len(ws)
-                    rr = ust.read(ws)
-                    R["unionst_words"].append((" ".join(x for x, _ in rr if x), min([s for _, s in rr] or [0.0])))
-                ms["unionst_words"] = (time.perf_counter() - t) * 1000
-                rec["n_word_crops"] = nwords
-                if p["unirec"]:
-                    t = time.perf_counter()
-                    R["unirec"] = uni.read(kc)
-                    ms["unirec"] = (time.perf_counter() - t) * 1000
-                rec["ms"] = ms
                 rec["n_crops"] = len(kc)
-                rows = []
-                for idx, i in enumerate(keep):
-                    g = norm_text(run_ocr.serialize([(w["t"], w["box"]) for w in gt_by.get(i, [])]))
-                    gnum = num_tokens(g)
-                    row = {"n": len(g), "nw": len(g.split()), "nnum": len(gnum),
-                           "w_px": int(kc[idx].shape[1]), "h_px": int(kc[idx].shape[0])}
-
-                    def sc(t):
-                        pt = norm_text(t)
-                        we, _ = word_edits(pt, g)
-                        return [edits(pt, g), we, sum((Counter(num_tokens(pt)) & Counter(gnum)).values())]
-                    for name in R:
-                        t_, c_ = R[name][idx]
-                        row[name] = sc(t_) + [round(float(c_), 4)]
-                    row["merged"] = sc(merge(R["v6s"][idx][0], R["unionst_words"][idx][0]))
-                    rows.append(row)
-                rec["crops"] = rows
-                e2e = {}
-                for name in R:
-                    items = [(t, boxes[i]["box"]) for i, (t, c) in zip(keep, R[name])
-                             if t and not (name in PADDLE and c < ppocr.TEXT_SCORE)]
-                    e2e[name] = run_ocr.e2e_metrics(items, gt_str, fields)
-                dfx = engines.defects(rgb, boxes)
-                task, lap = docres_gate(rgb, dfx)
-                rec["docres_gate"], rec["lap_var"] = task, lap
-                run_task, why = None, None
-                if task and caps[p["defect"]] < CAP_PER_DEFECT:
-                    caps[p["defect"]] += 1
-                    run_task, why = task, "gate"
-                elif p["ds"] == "synth" and p["defect"] == "clean" and forced < FORCED_CLEAN and not task:
-                    forced += 1
-                    run_task, why = "appearance", "forced_clean"
-                if run_task:
+                if GROUP == "docres":
+                    dfx = engines.defects(rgb, boxes)
+                    task, lap = docres_gate(rgb, dfx)
+                    rec["docres_gate"], rec["lap_var"] = task, lap
+                    run_task, why = None, None
+                    if task and caps[p["defect"]] < CAP_JOB:
+                        caps[p["defect"]] += 1
+                        run_task, why = task, "gate"
+                    elif p["ds"] == "synth" and p["defect"] == "clean" and forced < FORCED_JOB and not task:
+                        forced += 1
+                        run_task, why = "appearance", "forced_clean"
+                    e2e = {}
+                    if run_task:
+                        e2e["v6s"] = page_e2e(rgb, det, v6s, True, gt_str, fields)
+                        t = time.perf_counter()
+                        clean = model(rgb, run_task)
+                        dt = (time.perf_counter() - t) * 1000
+                        m = page_e2e(clean, det, v6s, True, gt_str, fields)
+                        m["ms_docres"] = dt
+                        e2e["docres_v6s"] = m
+                        rec["docres_task"], rec["docres_why"] = run_task, why
+                        rec["rss"] = rss_mb()
+                    rec["e2e"] = e2e
+                else:
+                    gts = crop_gt(words, boxes, keep)
+                    R, ms = {}, {}
                     t = time.perf_counter()
-                    clean = dres(rgb, run_task)
-                    dt = (time.perf_counter() - t) * 1000
-                    m = page_e2e(clean, det, eng["v6s"], True, gt_str, fields)
-                    m["ms_docres"] = dt
-                    e2e["docres_v6s"] = m
-                    rec["docres_task"], rec["docres_why"] = run_task, why
-                rec["e2e"] = e2e
-                rec["rss"] = rss_mb()
+                    R["v6s"] = v6s(kc)
+                    ms["v6s"] = (time.perf_counter() - t) * 1000
+                    if GROUP == "unionst":
+                        t = time.perf_counter()
+                        R["unionst_line"] = model.read(kc)
+                        ms["unionst_line"] = (time.perf_counter() - t) * 1000
+                        t = time.perf_counter()
+                        R["unionst_words"], nwords = [], 0
+                        for c in kc:
+                            ws = split_words(c)
+                            nwords += len(ws)
+                            rr = model.read(ws)
+                            R["unionst_words"].append((" ".join(x for x, _ in rr if x),
+                                                       min([s_ for _, s_ in rr] or [0.0])))
+                        ms["unionst_words"] = (time.perf_counter() - t) * 1000
+                        rec["n_word_crops"] = nwords
+                    else:
+                        t = time.perf_counter()
+                        R["unirec"] = model.read(kc)
+                        ms["unirec"] = (time.perf_counter() - t) * 1000
+                    rec["ms"] = ms
+                    crow = []
+                    for idx, g in enumerate(gts):
+                        row = {"n": len(g), "nw": len(g.split()), "nnum": len(num_tokens(g)),
+                               "w_px": int(kc[idx].shape[1]), "h_px": int(kc[idx].shape[0])}
+                        for name in R:
+                            row[name] = score_text(R[name][idx][0], g) + [round(float(R[name][idx][1]), 4)]
+                        if GROUP == "unionst":
+                            row["merged"] = score_text(merge(R["v6s"][idx][0], R["unionst_words"][idx][0]), g)
+                        crow.append(row)
+                    rec["crops"] = crow
+                    e2e = {}
+                    for name in R:
+                        items = [(t_, boxes[i]["box"]) for i, (t_, c_) in zip(keep, R[name])
+                                 if t_ and not (name in PADDLE and c_ < ppocr.TEXT_SCORE)]
+                        e2e[name] = run_ocr.e2e_metrics(items, gt_str, fields)
+                    rec["e2e"] = e2e
+                    rec["rss"] = rss_mb()
             except Exception as e:  # noqa: BLE001
                 rec["error"] = f"{type(e).__name__}: {e}"[:300]
                 rec["tb"] = traceback.format_exc()[-800:]
+                errs += 1
+            rows += 1
             f.write(json.dumps(rec) + "\n")
             f.flush()
-    print("done", k, n, len(mine))
+            if rows % 5 == 0:
+                print(GROUP, k, rows, len(mine), "errors", errs, "rss", round(rss_mb()), flush=True)
+    print("done", GROUP, k, n, "rows", rows, "errors", errs, flush=True)
+    if mine and (rows == 0 or errs > 0.02 * rows):
+        sys.exit(f"FAILED: {errs} errors in {rows} rows (limit 2%)")
 
 
 if __name__ == "__main__":

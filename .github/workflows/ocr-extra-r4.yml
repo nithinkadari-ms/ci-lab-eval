@@ -1,7 +1,7 @@
 name: ocr-extra-r4
 
 # Gap 1 extra challengers (tests only): UnionST-SP, UniRec-0.1B, gated DocRes, on the same pages and detector crops
-# as media-r4 (same caches). At most 8 jobs at once.
+# as media-r4 (same caches). 14 jobs (UnionST 4, UniRec 4, DocRes 6), at most 6 at once.
 on:
   workflow_dispatch: {}
 
@@ -53,14 +53,29 @@ jobs:
   extra:
     needs: prep
     runs-on: ubuntu-24.04
-    timeout-minutes: 240
-    env:
-      OMP_NUM_THREADS: "4"
+    # one process per job: UnionST, UniRec and DocRes each in their own jobs (memory)
+    timeout-minutes: 170
     strategy:
       fail-fast: false
-      max-parallel: 8
+      max-parallel: 6
       matrix:
-        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+        include:
+          - { group: unionst, shard: 0, n: 4 }
+          - { group: unionst, shard: 1, n: 4 }
+          - { group: unionst, shard: 2, n: 4 }
+          - { group: unionst, shard: 3, n: 4 }
+          - { group: unirec, shard: 0, n: 4 }
+          - { group: unirec, shard: 1, n: 4 }
+          - { group: unirec, shard: 2, n: 4 }
+          - { group: unirec, shard: 3, n: 4 }
+          - { group: docres, shard: 0, n: 6 }
+          - { group: docres, shard: 1, n: 6 }
+          - { group: docres, shard: 2, n: 6 }
+          - { group: docres, shard: 3, n: 6 }
+          - { group: docres, shard: 4, n: 6 }
+          - { group: docres, shard: 5, n: 6 }
+    env:
+      EXTRA_GROUP: ${{ matrix.group }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -97,10 +112,10 @@ jobs:
           path: formula/models_ref
           key: formula-r3-ref-v1-${{ hashFiles('formula/requirements.txt', 'formula/scripts/fetch_ref.py') }}
           fail-on-cache-miss: true
-      - run: mkdir -p out && python media/ocr/extra.py ${{ matrix.shard }} 12 out/extra-${{ matrix.shard }}.jsonl
+      - run: mkdir -p out && OMP_NUM_THREADS=4 python media/ocr/extra.py ${{ matrix.shard }} ${{ matrix.n }} out/extra-${{ matrix.group }}-${{ matrix.shard }}.jsonl
       - uses: actions/upload-artifact@v4
         if: always()
-        with: { name: "ocr-extra-${{ matrix.shard }}", path: out/ }
+        with: { name: "ocr-extra-${{ matrix.group }}-${{ matrix.shard }}", path: out/ }
 
   report:
     needs: [extra]
@@ -114,9 +129,15 @@ jobs:
       - run: pip install rapidfuzz==3.14.6 scipy==1.17.1
       - uses: actions/download-artifact@v4
         with: { path: art, pattern: "ocr-extra-*" }
+      - uses: actions/download-artifact@v4
+        with:
+          path: main
+          pattern: "ocr-pages-*"
+          run-id: "44898133792"
+          github-token: ${{ github.token }}
       - run: |
           mkdir -p out
-          python media/ocr/extra_agg.py art out/ocr_extra.md out/ocr_extra.json
+          python media/ocr/extra_agg.py art out/ocr_extra.md out/ocr_extra.json main
           cat out/ocr_extra.md >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         if: always()
