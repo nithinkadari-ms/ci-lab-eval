@@ -1,0 +1,40 @@
+name: ocr-diag-r4
+
+# Diagnose PP-OCRv6 medium vs small on long synthetic lines (input variants, printed strings for the worst crops).
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+env:
+  MEDIA_DATA: /home/runner/media-data
+  MEDIA_MODELS: /home/runner/media-models
+  OCR_N_SYNTH: "240"
+  PYTHONUNBUFFERED: "1"
+  OMP_NUM_THREADS: "4"
+
+jobs:
+  diag:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11", cache: pip, cache-dependency-path: "media/requirements*.txt" }
+      - run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends fonts-liberation fonts-dejavu-core
+      - run: pip install -r media/requirements.txt
+      - uses: actions/cache/restore@v4
+        with: { path: /home/runner/media-models, key: "media-models-v1-${{ hashFiles('media/fetch.py') }}", fail-on-cache-miss: true }
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            /home/runner/media-data/funsd
+            /home/runner/media-data/sroie
+            /home/runner/media-data/odb
+          key: media-ocr-data-v1
+          fail-on-cache-miss: true
+      - run: mkdir -p out && python media/ocr/diag_medium.py out/diag_medium.json | tee out/diag_medium.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: ocr-diag-medium, path: out/ }
