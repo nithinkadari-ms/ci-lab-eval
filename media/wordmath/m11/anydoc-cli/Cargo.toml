@@ -1,0 +1,11 @@
+[package]
+name = "anydoc-cli"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+anydoc = "=0.2.5"
+
+[profile.release]
+opt-level = 3

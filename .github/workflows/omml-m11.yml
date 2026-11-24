@@ -1,0 +1,52 @@
+name: omml-m11
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PTS_COMMIT: 7c7b4c628a8e1db149594519f7f2cc00bd08fa73
+  DOCBOSS_COMMIT: 2bf47d5a96286e412424f4b2eb7d2eff41855418
+
+jobs:
+  omml:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - run: pip install docling-rs==2.84.0 lxml==6.1.3 pyyaml==6.0.3
+      - name: plurimath-testsuite at a pinned commit (BSD-2)
+        run: |
+          git init -q pts
+          git -C pts fetch -q --depth 1 https://github.com/plurimath/plurimath-testsuite.git "$PTS_COMMIT"
+          git -C pts checkout -q FETCH_HEAD
+      - name: build easydoc-math 0.1.2, anydoc 0.2.5 and docboss CLIs
+        run: |
+          cargo build --release --manifest-path media/wordmath/edm/Cargo.toml
+          cargo build --release --manifest-path media/wordmath/m11/anydoc-cli/Cargo.toml
+          git init -q docboss
+          git -C docboss fetch -q --depth 1 https://github.com/4thel00z/docboss.git "$DOCBOSS_COMMIT"
+          git -C docboss checkout -q FETCH_HEAD
+          cargo build --release --manifest-path docboss/Cargo.toml -p docboss-cli
+      - name: normaliser self-test
+        run: python media/wordmath/m11/fairnorm.py
+      - name: outputs
+        env: { PTS_DIR: pts }
+        run: |
+          mkdir -p out
+          python media/wordmath/m11/omml_m11.py edm-outputs media/wordmath/edm/target/release/edm-cli out
+          python media/wordmath/m11/omml_m11.py docx-outputs docling - out
+          python media/wordmath/m11/omml_m11.py docx-outputs anydoc media/wordmath/m11/anydoc-cli/target/release/anydoc-cli out
+          python media/wordmath/m11/omml_m11.py docx-outputs docboss docboss/target/release/docboss out
+      - name: score
+        env: { PTS_DIR: pts }
+        run: |
+          python media/wordmath/m11/omml_m11.py score out
+          cat out/OMML_M11.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: omml-m11, path: out/ }
