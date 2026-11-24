@@ -21,11 +21,23 @@ import texnorm  # noqa: E402
 from mathmap import GREEK, SYM  # noqa: E402
 
 INVISIBLE = {"⁡", "⁢", "⁣", "⁤", "​", "﻿", " ", " ", " ", " ",
-             " ", " ", " ", " ", "⏟", "⏞"}
+             " ", " ", " ", " "}
 EXTRA = {"−": "-", "‐": "-", "‑": "-", "–": "-", "′": "'", "″": "''",
          "‖": r"\|", "∥": r"\|", "⋅": r"\cdot", "·": r"\cdot", "∙": r"\cdot",
          "→": r"\rightarrow", "∞": r"\infty", "…": r"\ldots", "⋯": r"\cdots"}
+EXTRA.update({"⏟": r"\underbrace", "⏞": r"\overbrace", "⃡": r"\overleftrightarrow", "⃖": r"\overleftarrow",
+              "∆": r"\increment", "⟦": r"\lbbrack", "⟧": r"\rbbrack"})
+# plurimath writes some symbols under its own names: same glyph, same token
+texnorm.SYN.update({r"\dbloint": r"\oiint", r"\hArr": r"\Leftrightarrow"})
+# function names LaTeX lacks but some converters write as macros: the same letters as operatorname
+texnorm.OPS.update({r"\sech", r"\csch", r"\arcsec", r"\arccsc", r"\arccot", r"\arcsinh", r"\arccosh", r"\arctanh",
+                    r"\arsinh", r"\arcosh", r"\artanh", r"\sgn"})
 OPNAMES = {t[1:] for t in texnorm.OPS}
+# a single accent character set over or under a body is that accent
+MARKS = {r"\overset": {r"\overbrace": r"\overbrace", r"\rightarrow": r"\vec", r"\to": r"\vec", r"\vec": r"\vec",
+                       r"\leftrightarrow": r"\overleftrightarrow", r"\overleftrightarrow": r"\overleftrightarrow",
+                       r"\leftarrow": r"\overleftarrow", r"\overleftarrow": r"\overleftarrow"},
+         r"\underset": {r"\underbrace": r"\underbrace"}}
 texnorm.ARITY.setdefault(r"\atop", 2)
 
 
@@ -70,7 +82,7 @@ def _genfrac_and_binom(nodes):
             out.append(("G", _genfrac_and_binom(n[1])))
             i += 1
             continue
-        if n == r"\genfrac" and i + 6 <= len(nodes):
+        if n == r"\genfrac" and i + 7 <= len(nodes):
             args = nodes[i + 1:i + 7]
             a, b = args[4], args[5]
             out += [r"\atop", a if isinstance(a, tuple) else ("G", [a]), b if isinstance(b, tuple) else ("G", [b])]
@@ -82,6 +94,15 @@ def _genfrac_and_binom(nodes):
                     b if isinstance(b, tuple) else ("G", [b]), ")"]
             i += 3
             continue
+        if n in MARKS and i + 2 < len(nodes):
+            mark = nodes[i + 1]
+            toks = [t for t in (mark[1] if isinstance(mark, tuple) else [mark]) if isinstance(t, str)]
+            if len(toks) == 1 and toks[0] in MARKS[n]:
+                body = nodes[i + 2]
+                inner = body[1] if isinstance(body, tuple) else [body]
+                out += [MARKS[n][toks[0]], ("G", _genfrac_and_binom(inner))]
+                i += 3
+                continue
         if n == r"\overrightarrow":
             out.append(r"\vec")
             i += 1
@@ -149,6 +170,9 @@ if __name__ == "__main__":
         (r"\sin(a)", r"\sin{a}", True), (r"\sin \theta", r"\sin{\theta}", True),
         (r"\frac{a}{b}", r"a/b", False), (r"x^{2}", r"x_{2}", False), (r"\sqrt{x}", r"\sqrt[3]{x}", False),
         (r"\vec{v}", r"\overrightarrow{v}", True), (r"a-b", "a−b", True),
+        (r"\underset{⏟}{x}", r"\underbrace{x}", True), (r"\overset{\to}{c}", r"\vec{c}", True),
+        (r"\operatorname{csch}x", r"\csch{x}", True), (r"\dbloint 1", r"\oiint 1", True),
+        (r"\overset{a}{b}", r"\vec{b}", False), (r"\underbrace{x}_{n}", r"\underset{n}{\underbrace{x}}", True),
     ]
     bad = 0
     for a, b, same in tests:
