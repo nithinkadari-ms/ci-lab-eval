@@ -11,11 +11,14 @@ dates imitated FUNSD's forms. Here:
   phone numbers, amounts, numbers) and "signature".
 * The simulator (m12_forms_b.sim_doc, unchanged layout code) uses generic labels, names, cities and years of our
   own, half of them without a keyword, so the keyword feature is not a perfect label detector.
-* Rule fixed before the run: simulated forms are split 60 / 20 / 20 by seed (fit / select / test). For each C in
-  the grid the threshold is picked on the select split (best pair F1); C is the one with the best select-split
-  pair F1 among those whose share of blanks wrongly filled is not above the nearest-label rule's on the select
-  split (if none qualifies, the best F1). The test split and FUNSD test (evaluation only, never used to choose)
-  are reported; the shipped round-b weights (old keywords) are scored for comparison.
+* Rule fixed before the run (round 2, decided on simulated data only): simulated forms are split 60 / 20 / 20
+  by seed (fit / select / test). Every C in the grid is fitted on the fit split and every threshold of the grid
+  is scored on the select split. Eligible (C, threshold) pairs fill blanks wrongly no more often than the
+  nearest-label rule does on the select split and reach at least its pair F1 there (without the F1 floor the
+  least-blanks choice would be a threshold that pairs nothing). Among them the pair with the smallest share of
+  blanks wrongly filled wins (rounded to 0.001), then the best pair F1. With no eligible pair the run says so
+  and no weights are written (the nearest-label rule ships). The test split and FUNSD test (evaluation only,
+  never used to choose) are reported; the shipped round-b weights (old keywords) are scored for comparison.
 
 usage: t2_forms_clean.py OUTDIR [N_SIM] [OLD_WEIGHTS_JSON]"""
 import json
@@ -127,15 +130,34 @@ def main():
         return s
 
     nn_select = add("nn@select", m12.nn(select))
-    models = {}
+    from sklearn.linear_model import LogisticRegression
+    Xs, ys = zip(*[m12.xy(d) for d in fit_docs if d["cands"]])
+    X_fit, y_fit = np.vstack(Xs), np.concatenate(ys)
+    select_x = [m12.xy(d)[0] if d["cands"] else None for d in select]
+    models, grid = {}, []
     for C in (0.001, 0.01, 0.1, 1.0, 10.0):
-        m, th = b.fit_c(fit_docs, select, C)
-        models[C] = (m, th)
-        add(f"C{C:g}@select", m12.score(m, th, select))
-    ok = [C for C in models if summary[f"C{C:g}@select"]["blank_filled"] <= nn_select["blank_filled"]]
-    pool = ok or list(models)
-    chosen = max(pool, key=lambda C: summary[f"C{C:g}@select"]["f1"])
-    m, th = models[chosen]
+        model = LogisticRegression(max_iter=6000, C=C).fit(X_fit, y_fit)
+        models[C] = model
+        scores = [model.decision_function(x) if x is not None else None for x in select_x]
+        for th in np.linspace(-3, 3, 25):
+            rs = [rf.evaluate(d, rf.assign(d["lines"], d["cands"], s, th) if s is not None else [])
+                  for d, s in zip(select, scores)]
+            _, stats = m12.row("", rs)
+            grid.append((C, float(th), stats["blank_filled"], stats["f1"]))
+    eligible = [g for g in grid if g[2] <= nn_select["blank_filled"] and g[3] >= nn_select["f1"]]
+    grid_md = ["| C | threshold | blanks wrongly filled @select | pair F1 @select | eligible |", "|---|---|---|---|---|"]
+    for C, th, bl, f in grid:
+        grid_md.append(f"| {C:g} | {th:.2f} | {bl:.3f} | {f:.3f} | {'yes' if (C, th, bl, f) in eligible else ''} |")
+    if not eligible:
+        md = ["## Tester round 2: form matcher refit (round 2 rule)", "",
+              "No (C, threshold) pair fills blanks wrongly no more often than the nearest-label rule while reaching "
+              "its pair F1 on the select split: no weights are written; the nearest-label rule ships.", ""] + grid_md
+        open(os.path.join(out, "t2_forms_clean.md"), "w", encoding="utf-8").write(chr(10).join(md) + chr(10))
+        print(chr(10).join(md))
+        return
+    chosen, th, _, _ = min(eligible, key=lambda g: (round(g[2], 3), -g[3]))
+    m = models[chosen]
+    add(f"chosen C{chosen:g} th{th:.2f}@select", m12.score(m, th, select))
     add("nn@test", m12.nn(test))
     add(f"chosen C{chosen:g}@test", m12.score(m, th, test))
     import engines
@@ -163,19 +185,26 @@ def main():
     md = ["## Tester round 2: form matcher refitted without FUNSD", "",
           f"Keywords ({len(KEYWORDS)}): {', '.join(sorted(KEYWORDS))}.", "",
           f"Simulated forms v3: {n_sim} (fit {len(fit_docs)} / select {len(select)} / test {len(test)}). "
-          f"Thresholds: " + ", ".join(f"C={C:g} {t:.2f}" for C, (_, t) in models.items()) +
-          f". Chosen C = {chosen:g} (rule fixed in advance, see the script).", "",
+          f"Chosen C = {chosen:g}, threshold {th:.2f} (round 2 rule fixed in advance, see the script).", "",
           "| method | pair P | pair R | pair F1 | blanks wrongly filled | repeated-label P / R |",
           "|---|---|---|---|---|---|"] + rows + ["", "| new vs (per-form F1, FUNSD test) | new better | worse | p |",
                                                  "|---|---|---|---|"]
     for k, v in sig.items():
         md.append(f"| {k} | {v['w']} | {v['l']} | {pfmt(v['p'])} |")
+    md += ["", "Selection grid (select split):", ""] + grid_md + [""]
+    rule_better = summary["nn@funsd_test"]["blank_filled"] < summary[f"chosen C{chosen:g}@funsd_test"]["blank_filled"]
+    md.append("FUNSD-eval blanks wrongly filled: chosen matcher " +
+              f"{summary[f'chosen C{chosen:g}@funsd_test']['blank_filled']:.3f} vs nearest-label rule "
+              f"{summary['nn@funsd_test']['blank_filled']:.3f} -> " +
+              ("the rule fills fewer: ship the nearest-label rule" if rule_better else "ship the new weights"))
     md.append("")
     open(os.path.join(out, "t2_forms_clean.md"), "w", encoding="utf-8").write("\n".join(md) + "\n")
-    json.dump({"summary": summary, "sig": sig, "chosen_c": chosen, "keywords": sorted(KEYWORDS)},
+    json.dump({"summary": summary, "sig": sig, "chosen_c": chosen, "threshold": th, "keywords": sorted(KEYWORDS),
+               "grid": grid},
               open(os.path.join(out, "t2_forms_clean.json"), "w"), indent=1)
     json.dump(m12.weights(m, th, f"line-level form simulator v3 (t2_forms_clean.py, generic labels and keywords, "
-                                 f"no FUNSD), C = {chosen:g} chosen on held-out simulated forms"),
+                                 f"no FUNSD), C = {chosen:g} and threshold {th:.2f} chosen on held-out simulated forms (fewest "
+                                 f"blanks wrongly filled, then pair F1)"),
               open(os.path.join(out, "form_matcher.json"), "w"), indent=1)
     samples = []
     for d in test[:12]:
